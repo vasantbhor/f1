@@ -20,6 +20,12 @@
   }
 }
 
+@layer components {
+  .entry-field {
+    @apply border border-emerald-700/30 bg-emerald-50/50 transition-colors hover:border-emerald-600/55 focus:border-emerald-500 focus:bg-white focus:outline-none focus:ring-2 focus:ring-emerald-200;
+  }
+}
+
 @media print {
   .no-print {
     display: none !important;

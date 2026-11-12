@@ -11,16 +11,18 @@ import {
   Wallet,
 } from 'lucide-react';
 import { useState } from 'react';
-import { formatCurrency, formatDateMarathi } from '../data/defaults';
-import type { ActiveTab, CropSummary, Voucher } from '../types/farm';
+import { formatCurrency, formatDateMarathi, getEntryTypeMeta } from '../data/defaults';
+import type { ActiveTab, CropSummary, PartyLedgerSummary, Voucher } from '../types/farm';
 
 interface DashboardProps {
   vouchers: Voucher[];
   cropSummaries: CropSummary[];
+  partyLedger: PartyLedgerSummary[];
   onNavigate: (tab: ActiveTab) => void;
   onEditVoucher: (voucher: Voucher) => void;
   onDeleteVoucher: (id: string) => void;
   onOpenCropReport: (crop: string) => void;
+  onOpenPartyLedger: (partyName: string) => void;
 }
 
 const CORE_CATEGORIES = ['खत', 'ट्रॅक्टर', 'कीटकनाशक', 'मजुरी', 'इतर'];
@@ -28,10 +30,12 @@ const CORE_CATEGORIES = ['खत', 'ट्रॅक्टर', 'कीटकन�
 export function Dashboard({
   vouchers,
   cropSummaries,
+  partyLedger,
   onNavigate,
   onEditVoucher,
   onDeleteVoucher,
   onOpenCropReport,
+  onOpenPartyLedger,
 }: DashboardProps) {
   const [confirmDeleteId, setConfirmDeleteId] = useState<string | null>(null);
   const totalExpense = vouchers
@@ -42,9 +46,12 @@ export function Dashboard({
     .reduce((sum, v) => sum + v.totalAmount, 0);
   const netProfit = totalIncome - totalExpense;
 
-  const creditExpense = vouchers
-    .filter((v) => v.entryType === 'खर्च' && v.paymentMode === 'उधार')
-    .reduce((sum, v) => sum + v.totalAmount, 0);
+  const netPayable = partyLedger
+    .filter((p) => p.netBalance > 0)
+    .reduce((sum, p) => sum + p.netBalance, 0);
+  const netReceivable = partyLedger
+    .filter((p) => p.netBalance < 0)
+    .reduce((sum, p) => sum + Math.abs(p.netBalance), 0);
 
   const categoryTotals: Record<string, number> = {};
   for (const v of vouchers) {
@@ -146,20 +153,24 @@ export function Dashboard({
           </p>
         </div>
 
-        <div className="rounded-2xl border border-amber-200 bg-white p-5 shadow-sm">
+        <button
+          type="button"
+          onClick={() => onNavigate('party-ledger')}
+          className="rounded-2xl border border-amber-200 bg-white p-5 text-left shadow-sm transition hover:border-amber-400"
+        >
           <div className="flex items-center justify-between">
-            <span className="text-xs font-bold text-stone-500">उधार खर्च (Credit)</span>
+            <span className="text-xs font-bold text-stone-500">उधार देणे बाकी (पार्टी खाते)</span>
             <span className="flex h-9 w-9 items-center justify-center rounded-xl bg-amber-100 text-amber-700">
               <Wallet className="h-5 w-5" />
             </span>
           </div>
           <div className="mt-2 text-2xl font-extrabold text-amber-700">
-            {formatCurrency(creditExpense)}
+            {formatCurrency(netPayable)}
           </div>
           <p className="mt-1 text-xs text-stone-500">
-            एकूण {vouchers.length} व्हाउचर नोंदवलेले
+            येणे / मजूर उचल: <span className="font-bold text-emerald-700">{formatCurrency(netReceivable)}</span>
           </p>
-        </div>
+        </button>
       </div>
 
       {/* Category Breakdown + Crop P&L Cards */}
@@ -309,6 +320,8 @@ export function Dashboard({
               <tbody>
                 {recentVouchers.map((v) => {
                   const isExp = v.entryType === 'खर्च';
+                  const isInc = v.entryType === 'उत्पन्न';
+                  const meta = getEntryTypeMeta(v.entryType);
                   return (
                     <tr key={v.id} className="hover:bg-stone-50">
                       <td className="border border-stone-300 px-3 py-2.5 font-bold text-stone-700">
@@ -321,24 +334,41 @@ export function Dashboard({
                         {v.crop}
                       </td>
                       <td className="border border-stone-300 px-3 py-2.5 text-stone-700">
-                        {v.partyName}
+                        {v.partyName && v.partyName !== 'रोख व्यवहार' ? (
+                          <button
+                            type="button"
+                            onClick={() => onOpenPartyLedger(v.partyName)}
+                            className="text-left font-semibold text-emerald-800 hover:underline"
+                          >
+                            {v.partyName}
+                          </button>
+                        ) : (
+                          v.partyName
+                        )}
                       </td>
                       <td className="border border-stone-300 px-3 py-2.5 whitespace-nowrap">
                         <span
-                          className={`inline-flex rounded-full px-2 py-0.5 text-xs font-bold ${
-                            isExp
-                              ? 'bg-rose-100 text-rose-700'
-                              : 'bg-emerald-100 text-emerald-700'
-                          }`}
+                          className={`inline-flex rounded-full px-2 py-0.5 text-xs font-bold ${meta.badgeClass}`}
                         >
-                          {v.entryType} ({v.paymentMode})
+                          {meta.shortLabel} ({v.paymentMode})
                         </span>
+                        {v.paymentRef && (
+                          <div className="mt-0.5 text-[11px] text-stone-500">{v.paymentRef}</div>
+                        )}
                       </td>
                       <td className="border border-stone-300 px-3 py-2.5 text-right font-extrabold whitespace-nowrap text-rose-600">
                         {isExp ? formatCurrency(v.totalAmount) : '-'}
                       </td>
                       <td className="border border-stone-300 px-3 py-2.5 text-right font-extrabold whitespace-nowrap text-emerald-700">
-                        {!isExp ? formatCurrency(v.totalAmount) : '-'}
+                        {isInc
+                          ? formatCurrency(v.totalAmount)
+                          : !isExp
+                            ? (
+                              <span className={`text-xs font-bold ${meta.amountClass}`}>
+                                {meta.shortLabel}: {formatCurrency(v.totalAmount)}
+                              </span>
+                            )
+                            : '-'}
                       </td>
                       <td className="border border-stone-300 px-3 py-2.5 text-center whitespace-nowrap">
                         <div className="inline-flex items-center gap-1.5">

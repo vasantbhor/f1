@@ -6,7 +6,12 @@ import {
   Loader2,
 } from 'lucide-react';
 import { useMemo, useState } from 'react';
-import { formatCurrency, formatDateMarathi, formatMonthMarathi } from '../data/defaults';
+import {
+  formatCurrency,
+  formatDateMarathi,
+  formatMonthMarathi,
+  getEntryTypeMeta,
+} from '../data/defaults';
 import type { Voucher } from '../types/farm';
 import {
   exportDateReportPdf,
@@ -187,7 +192,7 @@ export function DateReport({ vouchers, crops }: DateReportProps) {
                   type="date"
                   value={fromDate}
                   onChange={(e) => setFromDate(e.target.value)}
-                  className="w-full rounded-xl border border-stone-300 px-3 py-2 text-sm focus:border-emerald-500 focus:outline-none"
+                  className="entry-field w-full rounded-xl px-3 py-2 text-sm text-stone-900"
                 />
               </div>
               <div>
@@ -198,7 +203,7 @@ export function DateReport({ vouchers, crops }: DateReportProps) {
                   type="date"
                   value={toDate}
                   onChange={(e) => setToDate(e.target.value)}
-                  className="w-full rounded-xl border border-stone-300 px-3 py-2 text-sm focus:border-emerald-500 focus:outline-none"
+                  className="entry-field w-full rounded-xl px-3 py-2 text-sm text-stone-900"
                 />
               </div>
             </>
@@ -208,7 +213,7 @@ export function DateReport({ vouchers, crops }: DateReportProps) {
               <select
                 value={selectedMonth}
                 onChange={(e) => setSelectedMonth(e.target.value)}
-                className="w-full rounded-xl border border-stone-300 bg-white px-3 py-2 text-sm font-bold focus:border-emerald-500 focus:outline-none"
+                className="entry-field w-full rounded-xl px-3 py-2 text-sm font-bold text-stone-900"
               >
                 <option value="सर्व">सर्व महिने</option>
                 {availableMonths.map((m) => (
@@ -225,7 +230,7 @@ export function DateReport({ vouchers, crops }: DateReportProps) {
             <select
               value={cropFilter}
               onChange={(e) => setCropFilter(e.target.value)}
-              className="w-full rounded-xl border border-stone-300 bg-white px-3 py-2 text-sm font-bold focus:border-emerald-500 focus:outline-none"
+              className="entry-field w-full rounded-xl px-3 py-2 text-sm font-bold text-stone-900"
             >
               <option value="सर्व">सर्व पिके</option>
               {crops.map((c) => (
@@ -416,6 +421,8 @@ export function DateReport({ vouchers, crops }: DateReportProps) {
                     .sort((a, b) => b.date.localeCompare(a.date) || b.voucherNo - a.voucherNo)
                     .map((v) => {
                       const isExp = v.entryType === 'खर्च';
+                      const isInc = v.entryType === 'उत्पन्न';
+                      const meta = getEntryTypeMeta(v.entryType);
                       return (
                         <tr key={v.id} className="hover:bg-stone-50">
                           <td className="border border-stone-300 px-3 py-2.5 font-bold text-stone-700">
@@ -434,13 +441,24 @@ export function DateReport({ vouchers, crops }: DateReportProps) {
                             {v.items.map((it) => `${it.particular} (${it.category})`).join(', ')}
                           </td>
                           <td className="border border-stone-300 px-3 py-2.5 whitespace-nowrap text-xs font-semibold text-stone-700">
-                            {v.paymentMode} • {v.settlementType}
+                            <div>{meta.shortLabel} • {v.paymentMode}</div>
+                            {v.paymentRef && (
+                              <div className="text-[11px] font-normal text-stone-500">{v.paymentRef}</div>
+                            )}
                           </td>
                           <td className="border border-stone-300 px-3 py-2.5 text-right font-extrabold whitespace-nowrap text-rose-600">
                             {isExp ? formatCurrency(v.totalAmount) : '-'}
                           </td>
                           <td className="border border-stone-300 px-3 py-2.5 text-right font-extrabold whitespace-nowrap text-emerald-700">
-                            {!isExp ? formatCurrency(v.totalAmount) : '-'}
+                            {isInc
+                              ? formatCurrency(v.totalAmount)
+                              : !isExp
+                                ? (
+                                  <span className={`text-xs font-bold ${meta.amountClass}`}>
+                                    {meta.shortLabel}: {formatCurrency(v.totalAmount)}
+                                  </span>
+                                )
+                                : '-'}
                           </td>
                         </tr>
                       );

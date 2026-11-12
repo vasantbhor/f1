@@ -1,21 +1,35 @@
 import html2canvas from 'html2canvas';
 import { jsPDF } from 'jspdf';
 import * as XLSX from 'xlsx';
-import { formatCurrency, formatDateMarathi, formatMonthMarathi } from '../data/defaults';
-import type { CropSummary, Voucher } from '../types/farm';
+import {
+  formatCurrency,
+  formatDateMarathi,
+  formatMonthMarathi,
+  getEntryTypeMeta,
+  getPaymentModeLabel,
+} from '../data/defaults';
+import type {
+  CropSummary,
+  CustomerLedgerRow,
+  PartyLedgerSummary,
+  Voucher,
+} from '../types/farm';
 import type { DaySummaryRow, MonthSummaryRow } from './storage';
 
 function flattenVouchersForExcel(vouchers: Voucher[]) {
   const rows: Record<string, string | number>[] = [];
   for (const v of vouchers) {
     const isExp = v.entryType === 'खर्च';
+    const isInc = v.entryType === 'उत्पन्न';
+    const isParty = !isExp && !isInc;
     if (v.items.length === 0) {
       rows.push({
         'व्हाउचर क्र.': v.voucherNo,
         'दिनांक': formatDateMarathi(v.date),
         'पीक': v.crop,
         'पार्टीचे नाव': v.partyName || '-',
-        'व्यवहार प्रकार': v.paymentMode,
+        'व्यवहार माध्यम': v.paymentMode,
+        'UPI / चेक संदर्भ': v.paymentRef || '',
         'नोंद प्रकार': v.entryType,
         'पेमेंट / जमा': v.settlementType,
         'अ.क्र.': 1,
@@ -24,7 +38,8 @@ function flattenVouchersForExcel(vouchers: Voucher[]) {
         'प्रमाण': '',
         'दर (₹)': '',
         'खर्च (₹)': isExp ? v.totalAmount : 0,
-        'उत्पन्न (₹)': !isExp ? v.totalAmount : 0,
+        'उत्पन्न (₹)': isInc ? v.totalAmount : 0,
+        'पार्टी देणे-घेणे (₹)': isParty ? v.totalAmount : 0,
       });
     } else {
       for (const item of v.items) {
@@ -33,7 +48,8 @@ function flattenVouchersForExcel(vouchers: Voucher[]) {
           'दिनांक': formatDateMarathi(v.date),
           'पीक': v.crop,
           'पार्टीचे नाव': v.partyName || '-',
-          'व्यवहार प्रकार': v.paymentMode,
+          'व्यवहार माध्यम': v.paymentMode,
+          'UPI / चेक संदर्भ': v.paymentRef || '',
           'नोंद प्रकार': v.entryType,
           'पेमेंट / जमा': v.settlementType,
           'अ.क्र.': item.srNo,
@@ -42,7 +58,8 @@ function flattenVouchersForExcel(vouchers: Voucher[]) {
           'प्रमाण': item.qty ? Number(item.qty) : '',
           'दर (₹)': item.rate ? Number(item.rate) : '',
           'खर्च (₹)': isExp ? item.amount : 0,
-          'उत्पन्न (₹)': !isExp ? item.amount : 0,
+          'उत्पन्न (₹)': isInc ? item.amount : 0,
+          'पार्टी देणे-घेणे (₹)': isParty ? item.amount : 0,
         });
       }
     }
@@ -60,13 +77,17 @@ export function exportVoucherListExcel(vouchers: Voucher[]) {
   const totalInc = vouchers
     .filter((v) => v.entryType === 'उत्पन्न')
     .reduce((s, v) => s + v.totalAmount, 0);
+  const totalParty = vouchers
+    .filter((v) => v.entryType === 'पैसे दिले' || v.entryType === 'पैसे घेतले')
+    .reduce((s, v) => s + v.totalAmount, 0);
 
   rows.push({
     'व्हाउचर क्र.': '',
     'दिनांक': '',
     'पीक': 'एकूण बेरीज',
     'पार्टीचे नाव': '',
-    'व्यवहार प्रकार': '',
+    'व्यवहार माध्यम': '',
+    'UPI / चेक संदर्भ': '',
     'नोंद प्रकार': '',
     'पेमेंट / जमा': '',
     'अ.क्र.': '',
@@ -76,6 +97,7 @@ export function exportVoucherListExcel(vouchers: Voucher[]) {
     'दर (₹)': '',
     'खर्च (₹)': totalExp,
     'उत्पन्न (₹)': totalInc,
+    'पार्टी देणे-घेणे (₹)': totalParty,
   });
 
   const ws = XLSX.utils.json_to_sheet(rows);
@@ -252,21 +274,24 @@ function buildVoucherDetailTableHtml(vouchers: Voucher[]): string {
     .slice(0, 80)
     .map((v) => {
       const isExp = v.entryType === 'खर्च';
+      const isInc = v.entryType === 'उत्पन्न';
+      const meta = getEntryTypeMeta(v.entryType);
+      const refHtml = v.paymentRef ? `<br/><span style="color:#57534e;font-size:9.5px;">${escapeHtml(v.paymentRef)}</span>` : '';
       return `
       <tr>
         <td style="padding:6px 7px;${CELL_BORDER}">#${v.voucherNo}</td>
         <td style="padding:6px 7px;${CELL_BORDER}white-space:nowrap;">${formatDateMarathi(v.date)}</td>
         <td style="padding:6px 7px;${CELL_BORDER}font-weight:600;">${escapeHtml(v.crop)}</td>
         <td style="padding:6px 7px;${CELL_BORDER}">${escapeHtml(v.partyName || '-')}</td>
-        <td style="padding:6px 7px;${CELL_BORDER}">${v.paymentMode} / ${v.settlementType}</td>
+        <td style="padding:6px 7px;${CELL_BORDER}">${escapeHtml(meta.shortLabel)} • ${escapeHtml(v.paymentMode)}${refHtml}</td>
         <td style="padding:6px 7px;${CELL_BORDER}">${escapeHtml(
           v.items.map((i) => `${i.particular} (${i.category})`).join(', ')
         )}</td>
         <td style="padding:6px 7px;${CELL_BORDER}text-align:right;font-weight:700;color:#b91c1c;white-space:nowrap;">
           ${isExp ? formatCurrency(v.totalAmount) : '-'}
         </td>
-        <td style="padding:6px 7px;${CELL_BORDER}text-align:right;font-weight:700;color:#15803d;white-space:nowrap;">
-          ${!isExp ? formatCurrency(v.totalAmount) : '-'}
+        <td style="padding:6px 7px;${CELL_BORDER}text-align:right;font-weight:700;color:${isInc ? '#15803d' : meta.pdfColor};white-space:nowrap;">
+          ${isInc ? formatCurrency(v.totalAmount) : !isExp ? `${escapeHtml(meta.shortLabel)}: ${formatCurrency(v.totalAmount)}` : '-'}
         </td>
       </tr>`;
     })
@@ -300,8 +325,13 @@ function buildVoucherDetailTableHtml(vouchers: Voucher[]): string {
 
 export async function exportSingleVoucherPdf(voucher: Voucher): Promise<void> {
   const isExp = voucher.entryType === 'खर्च';
+  const isInc = voucher.entryType === 'उत्पन्न';
+  const isParty = !isExp && !isInc;
+  const meta = getEntryTypeMeta(voucher.entryType);
+  const showQtyRateInPdf = !isParty || voucher.items.some((i) => i.qty || i.rate);
   const rowsToShow = [...voucher.items];
-  while (rowsToShow.length < 4) {
+  const minRows = isParty ? 1 : 4;
+  while (rowsToShow.length < minRows) {
     rowsToShow.push({
       id: `empty-${rowsToShow.length}`,
       srNo: rowsToShow.length + 1,
@@ -320,14 +350,24 @@ export async function exportSingleVoucherPdf(voucher: Voucher): Promise<void> {
         <td style="padding:8px;${CELL_BORDER}text-align:center;font-weight:600;">${it.srNo}</td>
         <td style="padding:8px;${CELL_BORDER}">${escapeHtml(it.particular || '')}</td>
         <td style="padding:8px;${CELL_BORDER}">${escapeHtml(it.category || '')}</td>
-        <td style="padding:8px;${CELL_BORDER}text-align:right;">${escapeHtml(it.qty || '')}</td>
-        <td style="padding:8px;${CELL_BORDER}text-align:right;">${it.rate ? formatCurrency(Number(it.rate)) : ''}</td>
-        <td style="padding:8px;${CELL_BORDER}text-align:right;font-weight:700;color:#b91c1c;">
-          ${isExp && it.amount > 0 ? formatCurrency(it.amount) : ''}
-        </td>
-        <td style="padding:8px;${CELL_BORDER}text-align:right;font-weight:700;color:#15803d;">
-          ${!isExp && it.amount > 0 ? formatCurrency(it.amount) : ''}
-        </td>
+        ${
+          showQtyRateInPdf
+            ? `<td style="padding:8px;${CELL_BORDER}text-align:right;">${escapeHtml(it.qty || '')}</td>
+               <td style="padding:8px;${CELL_BORDER}text-align:right;">${it.rate ? formatCurrency(Number(it.rate)) : ''}</td>`
+            : ''
+        }
+        ${
+          isParty
+            ? `<td style="padding:8px;${CELL_BORDER}text-align:right;font-weight:700;color:${meta.pdfColor};">
+                ${it.amount > 0 ? formatCurrency(it.amount) : ''}
+              </td>`
+            : `<td style="padding:8px;${CELL_BORDER}text-align:right;font-weight:700;color:#b91c1c;">
+                ${isExp && it.amount > 0 ? formatCurrency(it.amount) : ''}
+              </td>
+              <td style="padding:8px;${CELL_BORDER}text-align:right;font-weight:700;color:#15803d;">
+                ${isInc && it.amount > 0 ? formatCurrency(it.amount) : ''}
+              </td>`
+        }
       </tr>`
     )
     .join('');
@@ -337,7 +377,7 @@ export async function exportSingleVoucherPdf(voucher: Voucher): Promise<void> {
       <div style="border-bottom:2px solid #15803d;padding-bottom:10px;margin-bottom:14px;display:flex;justify-content:space-between;align-items:center;">
         <div>
           <h1 style="margin:0;font-size:22px;color:#14532d;font-weight:800;">शिंगोटे शंकर — कृषी हिशोब (व्हाउचर पावती)</h1>
-          <p style="margin:2px 0 0;font-size:12px;color:#57534e;">शेती खर्च व उत्पन्न नोंदणी व्हाउचर</p>
+          <p style="margin:2px 0 0;font-size:12px;color:#57534e;">शेती खर्च, उत्पन्न व पार्टी व्यवहार नोंदणी व्हाउचर</p>
         </div>
         <div style="text-align:right;font-size:13px;">
           <div><strong>व्हाउचर क्र.:</strong> #${voucher.voucherNo}</div>
@@ -349,12 +389,14 @@ export async function exportSingleVoucherPdf(voucher: Voucher): Promise<void> {
         <tbody>
           <tr>
             <td style="padding:7px 10px;${CELL_BORDER}background:#fafaf9;width:50%;">
-              <strong>व्यवहार प्रकार:</strong> ${voucher.paymentMode} (${voucher.paymentMode === 'रोख' ? 'Cash' : 'Credit'})
+              <strong>पेमेंट माध्यम:</strong> ${escapeHtml(getPaymentModeLabel(voucher.paymentMode))}${
+                voucher.paymentRef ? ` — ${escapeHtml(voucher.paymentRef)}` : ''
+              }
             </td>
             <td style="padding:7px 10px;${CELL_BORDER}background:#fafaf9;width:50%;">
               <strong>नोंद प्रकार:</strong>
-              <span style="font-weight:800;color:${isExp ? '#b91c1c' : '#15803d'};">
-                ${voucher.entryType} (${isExp ? 'Expense' : 'Income'})
+              <span style="font-weight:800;color:${meta.pdfColor};">
+                ${escapeHtml(meta.label)}
               </span>
             </td>
           </tr>
@@ -363,12 +405,12 @@ export async function exportSingleVoucherPdf(voucher: Voucher): Promise<void> {
               <strong>पेमेंट / जमा:</strong> ${voucher.settlementType} (${voucher.settlementType === 'पेमेंट' ? 'Payment' : 'Received'})
             </td>
             <td style="padding:7px 10px;${CELL_BORDER}">
-              <strong>पीक (Crop):</strong> ${escapeHtml(voucher.crop)}
+              <strong>पीक / खाते:</strong> ${escapeHtml(voucher.crop)}
             </td>
           </tr>
           <tr>
             <td colspan="2" style="padding:7px 10px;${CELL_BORDER}">
-              <strong>पार्टीचे नाव (Party Name):</strong> ${escapeHtml(voucher.partyName || '-')}
+              <strong>पार्टीचे नाव (Party / मजूर):</strong> ${escapeHtml(voucher.partyName || '-')}
             </td>
           </tr>
         </tbody>
@@ -380,22 +422,36 @@ export async function exportSingleVoucherPdf(voucher: Voucher): Promise<void> {
             <th style="padding:8px;${CELL_BORDER}width:48px;text-align:center;">अ.क्र.</th>
             <th style="padding:8px;${CELL_BORDER}text-align:left;">तपशील</th>
             <th style="padding:8px;${CELL_BORDER}text-align:left;">प्रकार</th>
-            <th style="padding:8px;${CELL_BORDER}text-align:right;width:70px;">नग/प्रमाण</th>
-            <th style="padding:8px;${CELL_BORDER}text-align:right;width:85px;">दर (₹)</th>
-            <th style="padding:8px;${CELL_BORDER}text-align:right;width:100px;color:#991b1b;">खर्च (₹)</th>
-            <th style="padding:8px;${CELL_BORDER}text-align:right;width:100px;color:#166534;">उत्पन्न (₹)</th>
+            ${
+              showQtyRateInPdf
+                ? `<th style="padding:8px;${CELL_BORDER}text-align:right;width:70px;">नग/प्रमाण</th>
+                   <th style="padding:8px;${CELL_BORDER}text-align:right;width:85px;">दर (₹)</th>`
+                : ''
+            }
+            ${
+              isParty
+                ? `<th style="padding:8px;${CELL_BORDER}text-align:right;width:120px;color:${meta.pdfColor};">${escapeHtml(meta.shortLabel)} (₹)</th>`
+                : `<th style="padding:8px;${CELL_BORDER}text-align:right;width:100px;color:#991b1b;">खर्च (₹)</th>
+                   <th style="padding:8px;${CELL_BORDER}text-align:right;width:100px;color:#166534;">उत्पन्न (₹)</th>`
+            }
           </tr>
         </thead>
         <tbody>
           ${rowsHtml}
           <tr style="background:#f5f5f4;font-weight:800;font-size:13px;">
-            <td colspan="5" style="padding:9px 10px;${CELL_BORDER}text-align:right;">एकूण रक्कम:</td>
-            <td style="padding:9px 10px;${CELL_BORDER}text-align:right;color:#b91c1c;">
-              ${isExp ? formatCurrency(voucher.totalAmount) : '-'}
-            </td>
-            <td style="padding:9px 10px;${CELL_BORDER}text-align:right;color:#15803d;">
-              ${!isExp ? formatCurrency(voucher.totalAmount) : '-'}
-            </td>
+            <td colspan="${showQtyRateInPdf ? 5 : 3}" style="padding:9px 10px;${CELL_BORDER}text-align:right;">एकूण रक्कम:</td>
+            ${
+              isParty
+                ? `<td style="padding:9px 10px;${CELL_BORDER}text-align:right;color:${meta.pdfColor};">
+                    ${formatCurrency(voucher.totalAmount)}
+                  </td>`
+                : `<td style="padding:9px 10px;${CELL_BORDER}text-align:right;color:#b91c1c;">
+                    ${isExp ? formatCurrency(voucher.totalAmount) : '-'}
+                  </td>
+                  <td style="padding:9px 10px;${CELL_BORDER}text-align:right;color:#15803d;">
+                    ${isInc ? formatCurrency(voucher.totalAmount) : '-'}
+                  </td>`
+            }
           </tr>
         </tbody>
       </table>
@@ -622,4 +678,121 @@ export async function exportDateReportPdf(
 
   const filePrefix = mode === 'day' ? 'दिवसनिहाय_अहवाल' : 'महिन्यानिहाय_अहवाल';
   await renderHtmlToPdf(html, `${filePrefix}.pdf`);
+}
+
+function formatBalanceText(bal: number): string {
+  if (bal > 0) return `देणे बाकी: ${formatCurrency(bal)}`;
+  if (bal < 0) return `येणे बाकी: ${formatCurrency(Math.abs(bal))}`;
+  return 'हिशोब पूर्ण (₹0)';
+}
+
+export function exportCustomerLedgerExcel(
+  summary: PartyLedgerSummary,
+  rows: CustomerLedgerRow[]
+) {
+  const wb = XLSX.utils.book_new();
+  const sheetRows = rows.map(({ voucher: v, runningBalance }) => ({
+    'व्हाउचर क्र.': `#${v.voucherNo}`,
+    'दिनांक': formatDateMarathi(v.date),
+    'नोंद प्रकार': v.entryType,
+    'माध्यम': v.paymentMode,
+    'UPI / चेक संदर्भ': v.paymentRef || '',
+    'पीक / खाते': v.crop,
+    'तपशील': v.items
+      .map((i) => `${i.particular} (${i.category})${i.qty && i.rate ? ` [${i.qty}×${i.rate}]` : ''}`)
+      .join(', '),
+    'टीप': v.notes || '',
+    'रक्कम (₹)': v.totalAmount,
+    'शिल्लक स्थिती': formatBalanceText(runningBalance),
+  }));
+
+  const ws1 = XLSX.utils.json_to_sheet(sheetRows);
+  XLSX.utils.book_append_sheet(wb, ws1, 'खातेवही तपशील');
+  const safeName = summary.partyName.replace(/[\\/:*?"<>|]/g, '_');
+  XLSX.writeFile(wb, `खातेवही_${safeName}.xlsx`);
+}
+
+export async function exportCustomerLedgerPdf(
+  summary: PartyLedgerSummary,
+  rows: CustomerLedgerRow[]
+): Promise<void> {
+  const rowsHtml = rows
+    .map(({ voucher: v, runningBalance }) => {
+      const meta = getEntryTypeMeta(v.entryType);
+      const refHtml = v.paymentRef
+        ? `<br/><span style="font-size:9.5px;color:#57534e;">${escapeHtml(v.paymentRef)}</span>`
+        : '';
+      const balColor =
+        runningBalance > 0 ? '#b91c1c' : runningBalance < 0 ? '#15803d' : '#44403c';
+      return `
+      <tr>
+        <td style="padding:6px 7px;${CELL_BORDER}">#${v.voucherNo}</td>
+        <td style="padding:6px 7px;${CELL_BORDER}white-space:nowrap;">${formatDateMarathi(v.date)}</td>
+        <td style="padding:6px 7px;${CELL_BORDER}font-weight:700;color:${meta.pdfColor};">${escapeHtml(meta.shortLabel)}</td>
+        <td style="padding:6px 7px;${CELL_BORDER}">${escapeHtml(v.paymentMode)}${refHtml}</td>
+        <td style="padding:6px 7px;${CELL_BORDER}">${escapeHtml(
+          v.items.map((i) => `${i.particular} (${i.category})`).join(', ')
+        )}${v.notes ? `<br/><span style="font-size:9.5px;color:#57534e;">टीप: ${escapeHtml(v.notes)}</span>` : ''}</td>
+        <td style="padding:6px 7px;${CELL_BORDER}text-align:right;font-weight:700;color:${meta.pdfColor};white-space:nowrap;">
+          ${formatCurrency(v.totalAmount)}
+        </td>
+        <td style="padding:6px 7px;${CELL_BORDER}text-align:right;font-weight:700;color:${balColor};white-space:nowrap;">
+          ${escapeHtml(formatBalanceText(runningBalance))}
+        </td>
+      </tr>`;
+    })
+    .join('');
+
+  const netColor =
+    summary.netBalance > 0 ? '#b91c1c' : summary.netBalance < 0 ? '#15803d' : '#44403c';
+
+  const html = `
+    <div style="border-bottom:3px solid #15803d;padding-bottom:10px;margin-bottom:14px;">
+      <h1 style="margin:0;font-size:21px;color:#14532d;font-weight:800;">शिंगोटे शंकर — कृषी हिशोब (ग्राहक / पार्टी खातेवही)</h1>
+      <p style="margin:4px 0 0;font-size:13px;color:#1c1917;"><strong>पार्टी / ग्राहक:</strong> ${escapeHtml(summary.partyName)} | <strong>दिनांक:</strong> ${formatDateMarathi(new Date().toISOString().slice(0, 10))}</p>
+    </div>
+
+    <div style="display:flex;gap:10px;margin-bottom:16px;">
+      <div style="flex:1;background:#fef2f2;border:1px solid #fca5a5;border-radius:6px;padding:8px 10px;">
+        <div style="font-size:10.5px;color:#991b1b;">उधार खरेदी</div>
+        <div style="font-size:15px;font-weight:800;color:#b91c1c;">${formatCurrency(summary.creditExpense)}</div>
+      </div>
+      <div style="flex:1;background:#fffbeb;border:1px solid #fcd34d;border-radius:6px;padding:8px 10px;">
+        <div style="font-size:10.5px;color:#92400e;">दिलेले पैसे</div>
+        <div style="font-size:15px;font-weight:800;color:#b45309;">${formatCurrency(summary.paidOut)}</div>
+      </div>
+      <div style="flex:1;background:#f0fdf4;border:1px solid #86efac;border-radius:6px;padding:8px 10px;">
+        <div style="font-size:10.5px;color:#166534;">उधार विक्री</div>
+        <div style="font-size:15px;font-weight:800;color:#15803d;">${formatCurrency(summary.creditIncome)}</div>
+      </div>
+      <div style="flex:1;background:#f0f9ff;border:1px solid #7dd3fc;border-radius:6px;padding:8px 10px;">
+        <div style="font-size:10.5px;color:#075985;">घेतलेले पैसे</div>
+        <div style="font-size:15px;font-weight:800;color:#0369a1;">${formatCurrency(summary.receivedIn)}</div>
+      </div>
+      <div style="flex:1.2;background:#f5f5f4;border:1px solid #a8a29e;border-radius:6px;padding:8px 10px;">
+        <div style="font-size:10.5px;color:#44403c;">सद्य शिल्लक स्थिती</div>
+        <div style="font-size:15px;font-weight:800;color:${netColor};">${escapeHtml(formatBalanceText(summary.netBalance))}</div>
+      </div>
+    </div>
+
+    <table style="width:100%;border-collapse:collapse;font-size:10.5px;">
+      <thead>
+        <tr style="background:#e7e5e4;color:#1c1917;">
+          <th style="padding:7px;${CELL_BORDER}text-align:left;">क्र.</th>
+          <th style="padding:7px;${CELL_BORDER}text-align:left;">दिनांक</th>
+          <th style="padding:7px;${CELL_BORDER}text-align:left;">प्रकार</th>
+          <th style="padding:7px;${CELL_BORDER}text-align:left;">माध्यम</th>
+          <th style="padding:7px;${CELL_BORDER}text-align:left;">तपशील</th>
+          <th style="padding:7px;${CELL_BORDER}text-align:right;">रक्कम (₹)</th>
+          <th style="padding:7px;${CELL_BORDER}text-align:right;">चालू बाकी</th>
+        </tr>
+      </thead>
+      <tbody>
+        ${rowsHtml}
+      </tbody>
+    </table>
+  `;
+
+  const safeName = summary.partyName.replace(/[\\/:*?"<>|]/g, '_');
+  await renderHtmlToPdf(html, `खातेवही_${safeName}.pdf`);
 }

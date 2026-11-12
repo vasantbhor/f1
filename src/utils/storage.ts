@@ -2,15 +2,25 @@ import {
   DEFAULT_CROPS,
   DEFAULT_EXPENSE_CATEGORIES,
   DEFAULT_INCOME_CATEGORIES,
+  DEFAULT_PARTY_PAYMENT_CATEGORIES,
+  DEFAULT_PARTY_RECEIPT_CATEGORIES,
   getSampleVouchers,
 } from '../data/defaults';
-import type { CropSummary, Voucher, VoucherDraft } from '../types/farm';
+import type {
+  CropSummary,
+  CustomerLedgerRow,
+  PartyLedgerSummary,
+  Voucher,
+  VoucherDraft,
+} from '../types/farm';
 
 const STORAGE_KEYS = {
   VOUCHERS: 'krushi_hisob_vouchers_v1',
   CROPS: 'krushi_hisob_crops_v1',
   EXPENSE_CATS: 'krushi_hisob_exp_cats_v1',
   INCOME_CATS: 'krushi_hisob_inc_cats_v1',
+  PARTY_PAYMENT_CATS: 'krushi_hisob_party_pay_cats_v1',
+  PARTY_RECEIPT_CATS: 'krushi_hisob_party_rec_cats_v1',
   INITIALIZED: 'krushi_hisob_init_v1',
   DRAFT: 'krushi_hisob_draft_v1',
 };
@@ -20,6 +30,8 @@ export function loadInitialData(): {
   crops: string[];
   expenseCategories: string[];
   incomeCategories: string[];
+  partyPaymentCategories: string[];
+  partyReceiptCategories: string[];
 } {
   try {
     const initialized = localStorage.getItem(STORAGE_KEYS.INITIALIZED);
@@ -27,6 +39,8 @@ export function loadInitialData(): {
     const rawCrops = localStorage.getItem(STORAGE_KEYS.CROPS);
     const rawExpCats = localStorage.getItem(STORAGE_KEYS.EXPENSE_CATS);
     const rawIncCats = localStorage.getItem(STORAGE_KEYS.INCOME_CATS);
+    const rawPartyPayCats = localStorage.getItem(STORAGE_KEYS.PARTY_PAYMENT_CATS);
+    const rawPartyRecCats = localStorage.getItem(STORAGE_KEYS.PARTY_RECEIPT_CATS);
 
     let vouchers: Voucher[] = [];
     if (!initialized && !rawVouchers) {
@@ -44,14 +58,29 @@ export function loadInitialData(): {
     const incomeCategories = rawIncCats
       ? (JSON.parse(rawIncCats) as string[])
       : DEFAULT_INCOME_CATEGORIES;
+    const partyPaymentCategories = rawPartyPayCats
+      ? (JSON.parse(rawPartyPayCats) as string[])
+      : DEFAULT_PARTY_PAYMENT_CATEGORIES;
+    const partyReceiptCategories = rawPartyRecCats
+      ? (JSON.parse(rawPartyRecCats) as string[])
+      : DEFAULT_PARTY_RECEIPT_CATEGORIES;
 
-    return { vouchers, crops, expenseCategories, incomeCategories };
+    return {
+      vouchers,
+      crops,
+      expenseCategories,
+      incomeCategories,
+      partyPaymentCategories,
+      partyReceiptCategories,
+    };
   } catch {
     return {
       vouchers: getSampleVouchers(),
       crops: DEFAULT_CROPS,
       expenseCategories: DEFAULT_EXPENSE_CATEGORIES,
       incomeCategories: DEFAULT_INCOME_CATEGORIES,
+      partyPaymentCategories: DEFAULT_PARTY_PAYMENT_CATEGORIES,
+      partyReceiptCategories: DEFAULT_PARTY_RECEIPT_CATEGORIES,
     };
   }
 }
@@ -71,6 +100,14 @@ export function saveExpenseCategories(categories: string[]): void {
 
 export function saveIncomeCategories(categories: string[]): void {
   localStorage.setItem(STORAGE_KEYS.INCOME_CATS, JSON.stringify(categories));
+}
+
+export function savePartyPaymentCategories(categories: string[]): void {
+  localStorage.setItem(STORAGE_KEYS.PARTY_PAYMENT_CATS, JSON.stringify(categories));
+}
+
+export function savePartyReceiptCategories(categories: string[]): void {
+  localStorage.setItem(STORAGE_KEYS.PARTY_RECEIPT_CATS, JSON.stringify(categories));
 }
 
 export function loadVoucherDraft(): VoucherDraft | null {
@@ -105,6 +142,9 @@ export function computeCropSummaries(vouchers: Voucher[]): CropSummary[] {
   const map = new Map<string, CropSummary>();
 
   for (const v of vouchers) {
+    // Party payments/receipts settle balances or advances rather than creating crop P&L
+    if (v.entryType !== 'खर्च' && v.entryType !== 'उत्पन्न') continue;
+
     const cropName = v.crop?.trim() || 'इतर / सर्वसाधारण';
     if (!map.has(cropName)) {
       map.set(cropName, {
@@ -125,13 +165,98 @@ export function computeCropSummaries(vouchers: Voucher[]): CropSummary[] {
         const cat = item.category || 'इतर';
         summary.categoryExpenses[cat] = (summary.categoryExpenses[cat] || 0) + item.amount;
       }
-    } else {
+    } else if (v.entryType === 'उत्पन्न') {
       summary.totalIncome += v.totalAmount;
     }
     summary.profitLoss = summary.totalIncome - summary.totalExpense;
   }
 
   return Array.from(map.values()).sort((a, b) => b.totalExpense + b.totalIncome - (a.totalExpense + a.totalIncome));
+}
+
+export function computePartyLedger(vouchers: Voucher[]): PartyLedgerSummary[] {
+  const map = new Map<string, PartyLedgerSummary>();
+
+  for (const v of vouchers) {
+    const rawParty = v.partyName?.trim();
+    if (!rawParty || rawParty === 'रोख व्यवहार') continue;
+
+    const isCreditPurchase = v.entryType === 'खर्च' && v.paymentMode === 'उधार';
+    const isCreditSale = v.entryType === 'उत्पन्न' && v.paymentMode === 'उधार';
+    const isPaidOut = v.entryType === 'पैसे दिले';
+    const isReceivedIn = v.entryType === 'पैसे घेतले';
+
+    if (!map.has(rawParty)) {
+      map.set(rawParty, {
+        partyName: rawParty,
+        creditExpense: 0,
+        creditIncome: 0,
+        paidOut: 0,
+        receivedIn: 0,
+        netBalance: 0,
+        lastDate: v.date,
+        voucherCount: 0,
+        vouchers: [],
+      });
+    }
+
+    const entry = map.get(rawParty)!;
+    entry.voucherCount += 1;
+    entry.vouchers.push(v);
+    if (v.date > entry.lastDate) entry.lastDate = v.date;
+
+    if (isCreditPurchase) entry.creditExpense += v.totalAmount;
+    if (isCreditSale) entry.creditIncome += v.totalAmount;
+    if (isPaidOut) entry.paidOut += v.totalAmount;
+    if (isReceivedIn) entry.receivedIn += v.totalAmount;
+
+    entry.netBalance =
+      entry.creditExpense + entry.receivedIn - (entry.creditIncome + entry.paidOut);
+  }
+
+  return Array.from(map.values())
+    .map((entry) => ({
+      ...entry,
+      vouchers: [...entry.vouchers].sort(
+        (a, b) => b.date.localeCompare(a.date) || b.voucherNo - a.voucherNo
+      ),
+    }))
+    .sort((a, b) => {
+      const aOpen = a.netBalance !== 0 ? 1 : 0;
+      const bOpen = b.netBalance !== 0 ? 1 : 0;
+      if (aOpen !== bOpen) return bOpen - aOpen;
+      if (Math.abs(b.netBalance) !== Math.abs(a.netBalance)) {
+        return Math.abs(b.netBalance) - Math.abs(a.netBalance);
+      }
+      return b.lastDate.localeCompare(a.lastDate);
+    });
+}
+
+export function buildCustomerLedgerRows(vouchers: Voucher[]): CustomerLedgerRow[] {
+  const chronological = [...vouchers].sort(
+    (a, b) => a.date.localeCompare(b.date) || a.voucherNo - b.voucherNo
+  );
+
+  let runningBalance = 0;
+  return chronological.map((voucher) => {
+    let balanceDelta = 0;
+    if (voucher.entryType === 'खर्च' && voucher.paymentMode === 'उधार') {
+      balanceDelta = voucher.totalAmount;
+    } else if (voucher.entryType === 'पैसे घेतले') {
+      balanceDelta = voucher.totalAmount;
+    } else if (voucher.entryType === 'उत्पन्न' && voucher.paymentMode === 'उधार') {
+      balanceDelta = -voucher.totalAmount;
+    } else if (voucher.entryType === 'पैसे दिले') {
+      balanceDelta = -voucher.totalAmount;
+    }
+
+    runningBalance += balanceDelta;
+    return {
+      voucher,
+      balanceDelta,
+      runningBalance,
+    };
+  });
 }
 
 export interface DaySummaryRow {
@@ -161,7 +286,7 @@ export function computeDayWiseSummaries(vouchers: Voucher[]): DaySummaryRow[] {
     row.vouchers.push(v);
     if (v.entryType === 'खर्च') {
       row.expense += v.totalAmount;
-    } else {
+    } else if (v.entryType === 'उत्पन्न') {
       row.income += v.totalAmount;
     }
     row.net = row.income - row.expense;
@@ -197,7 +322,7 @@ export function computeMonthWiseSummaries(vouchers: Voucher[]): MonthSummaryRow[
     row.vouchers.push(v);
     if (v.entryType === 'खर्च') {
       row.expense += v.totalAmount;
-    } else {
+    } else if (v.entryType === 'उत्पन्न') {
       row.income += v.totalAmount;
     }
     row.net = row.income - row.expense;

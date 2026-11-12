@@ -9,8 +9,8 @@ import {
   Trash2,
 } from 'lucide-react';
 import { useMemo, useState } from 'react';
-import { formatCurrency, formatDateMarathi } from '../data/defaults';
-import type { Voucher } from '../types/farm';
+import { formatCurrency, formatDateMarathi, getEntryTypeMeta } from '../data/defaults';
+import type { EntryType, PaymentMode, Voucher } from '../types/farm';
 import {
   exportSingleVoucherPdf,
   exportVoucherListExcel,
@@ -23,6 +23,7 @@ interface VoucherListProps {
   onEditVoucher: (voucher: Voucher) => void;
   onDeleteVoucher: (id: string) => void;
   onNewVoucher: () => void;
+  onOpenPartyLedger: (partyName: string) => void;
 }
 
 export function VoucherList({
@@ -31,11 +32,12 @@ export function VoucherList({
   onEditVoucher,
   onDeleteVoucher,
   onNewVoucher,
+  onOpenPartyLedger,
 }: VoucherListProps) {
   const [searchText, setSearchText] = useState('');
   const [cropFilter, setCropFilter] = useState('सर्व');
-  const [typeFilter, setTypeFilter] = useState<'सर्व' | 'खर्च' | 'उत्पन्न'>('सर्व');
-  const [modeFilter, setModeFilter] = useState<'सर्व' | 'रोख' | 'उधार'>('सर्व');
+  const [typeFilter, setTypeFilter] = useState<'सर्व' | EntryType>('सर्व');
+  const [modeFilter, setModeFilter] = useState<'सर्व' | PaymentMode>('सर्व');
   const [confirmDeleteId, setConfirmDeleteId] = useState<string | null>(null);
   const [exportingPdf, setExportingPdf] = useState(false);
   const [exportingVoucherId, setExportingVoucherId] = useState<string | null>(null);
@@ -52,6 +54,7 @@ export function VoucherList({
             String(v.voucherNo),
             v.partyName,
             v.crop,
+            v.paymentRef || '',
             ...v.items.map((i) => `${i.particular} ${i.category}`),
           ]
             .join(' ')
@@ -151,14 +154,14 @@ export function VoucherList({
               placeholder="पार्टी, तपशील, क्र. शोधा..."
               value={searchText}
               onChange={(e) => setSearchText(e.target.value)}
-              className="w-full rounded-xl border border-stone-300 py-2 pr-3 pl-9 text-sm focus:border-emerald-500 focus:outline-none"
+              className="entry-field w-full rounded-xl py-2 pr-3 pl-9 text-sm text-stone-900 placeholder:text-stone-400"
             />
           </div>
 
           <select
             value={cropFilter}
             onChange={(e) => setCropFilter(e.target.value)}
-            className="w-full rounded-xl border border-stone-300 bg-white px-3 py-2 text-sm font-semibold focus:border-emerald-500 focus:outline-none"
+            className="entry-field w-full rounded-xl px-3 py-2 text-sm font-semibold text-stone-900"
           >
             <option value="सर्व">सर्व पिके</option>
             {crops.map((c) => (
@@ -170,22 +173,26 @@ export function VoucherList({
 
           <select
             value={typeFilter}
-            onChange={(e) => setTypeFilter(e.target.value as 'सर्व' | 'खर्च' | 'उत्पन्न')}
-            className="w-full rounded-xl border border-stone-300 bg-white px-3 py-2 text-sm font-semibold focus:border-emerald-500 focus:outline-none"
+            onChange={(e) => setTypeFilter(e.target.value as 'सर्व' | EntryType)}
+            className="entry-field w-full rounded-xl px-3 py-2 text-sm font-semibold text-stone-900"
           >
-            <option value="सर्व">सर्व नोंदी (खर्च व उत्पन्न)</option>
+            <option value="सर्व">सर्व नोंदी (खर्च, उत्पन्न व पार्टी)</option>
             <option value="खर्च">फक्त खर्च</option>
             <option value="उत्पन्न">फक्त उत्पन्न</option>
+            <option value="पैसे दिले">पैसे दिले (उधारी / उचल)</option>
+            <option value="पैसे घेतले">पैसे घेतले (वसुली / जमा)</option>
           </select>
 
           <select
             value={modeFilter}
-            onChange={(e) => setModeFilter(e.target.value as 'सर्व' | 'रोख' | 'उधार')}
-            className="w-full rounded-xl border border-stone-300 bg-white px-3 py-2 text-sm font-semibold focus:border-emerald-500 focus:outline-none"
+            onChange={(e) => setModeFilter(e.target.value as 'सर्व' | PaymentMode)}
+            className="entry-field w-full rounded-xl px-3 py-2 text-sm font-semibold text-stone-900"
           >
-            <option value="सर्व">रोख व उधार दोन्ही</option>
+            <option value="सर्व">सर्व माध्यम (रोख / उधार / UPI / चेक)</option>
             <option value="रोख">फक्त रोख (Cash)</option>
             <option value="उधार">फक्त उधार (Credit)</option>
+            <option value="UPI">फक्त UPI (ऑनलाइन)</option>
+            <option value="चेक">फक्त चेक (Cheque)</option>
           </select>
         </div>
 
@@ -229,6 +236,8 @@ export function VoucherList({
                 <tbody>
                   {filtered.map((v) => {
                     const isExp = v.entryType === 'खर्च';
+                    const isInc = v.entryType === 'उत्पन्न';
+                    const meta = getEntryTypeMeta(v.entryType);
                     return (
                       <tr key={v.id} className="hover:bg-stone-50">
                         <td className="border border-stone-300 px-3 py-2.5 font-bold text-stone-800 whitespace-nowrap">
@@ -241,12 +250,28 @@ export function VoucherList({
                           {v.crop}
                         </td>
                         <td className="border border-stone-300 px-3 py-2.5 text-stone-800">
-                          {v.partyName}
+                          {v.partyName && v.partyName !== 'रोख व्यवहार' ? (
+                            <button
+                              type="button"
+                              onClick={() => onOpenPartyLedger(v.partyName)}
+                              className="text-left font-semibold text-emerald-800 hover:underline"
+                            >
+                              {v.partyName}
+                            </button>
+                          ) : (
+                            v.partyName
+                          )}
                         </td>
                         <td className="border border-stone-300 px-3 py-2.5 text-xs whitespace-nowrap">
-                          <span className="font-semibold text-stone-700">
-                            {v.paymentMode} • {v.settlementType}
+                          <span className={`inline-flex rounded-full px-2 py-0.5 text-[11px] font-bold ${meta.badgeClass}`}>
+                            {meta.shortLabel}
                           </span>
+                          <div className="mt-0.5 font-semibold text-stone-700">
+                            {v.paymentMode} • {v.settlementType}
+                          </div>
+                          {v.paymentRef && (
+                            <div className="text-[11px] text-stone-500">{v.paymentRef}</div>
+                          )}
                         </td>
                         <td className="border border-stone-300 px-3 py-2.5 text-xs text-stone-700">
                           {v.items.map((it) => `${it.particular} (${it.category})`).join(', ')}
@@ -255,7 +280,15 @@ export function VoucherList({
                           {isExp ? formatCurrency(v.totalAmount) : '-'}
                         </td>
                         <td className="border border-stone-300 px-3 py-2.5 text-right font-extrabold text-emerald-700 whitespace-nowrap">
-                          {!isExp ? formatCurrency(v.totalAmount) : '-'}
+                          {isInc
+                            ? formatCurrency(v.totalAmount)
+                            : !isExp
+                              ? (
+                                <span className={`text-xs font-bold ${meta.amountClass}`}>
+                                  {meta.shortLabel}: {formatCurrency(v.totalAmount)}
+                                </span>
+                              )
+                              : '-'}
                         </td>
                         <td className="border border-stone-300 px-2.5 py-2 text-center whitespace-nowrap">
                           <div className="inline-flex items-center gap-1.5">
@@ -345,6 +378,8 @@ export function VoucherList({
           <div className="space-y-3 md:hidden">
             {filtered.map((v) => {
               const isExp = v.entryType === 'खर्च';
+              const isInc = v.entryType === 'उत्पन्न';
+              const meta = getEntryTypeMeta(v.entryType);
               return (
                 <div
                   key={v.id}
@@ -362,24 +397,51 @@ export function VoucherList({
                         <span className="rounded-full border border-emerald-200 bg-emerald-50 px-2 py-0.5 text-xs font-extrabold text-emerald-800">
                           {v.crop}
                         </span>
+                        <span className={`rounded-full px-2 py-0.5 text-[11px] font-bold ${meta.badgeClass}`}>
+                          {meta.shortLabel} • {v.paymentMode}
+                        </span>
                       </div>
-                      <div className="text-sm font-bold text-stone-900">{v.partyName}</div>
+                      {v.partyName && v.partyName !== 'रोख व्यवहार' ? (
+                        <button
+                          type="button"
+                          onClick={() => onOpenPartyLedger(v.partyName)}
+                          className="text-left text-sm font-bold text-emerald-800 hover:underline"
+                        >
+                          {v.partyName}
+                        </button>
+                      ) : (
+                        <div className="text-sm font-bold text-stone-900">{v.partyName}</div>
+                      )}
+                      {v.paymentRef && (
+                        <div className="text-xs text-stone-500">संदर्भ: {v.paymentRef}</div>
+                      )}
                     </div>
 
-                    <div className="grid grid-cols-2 gap-2 text-right text-xs">
-                      <div className="rounded-lg border border-rose-200 bg-rose-50 px-2.5 py-1">
-                        <div className="text-[10px] font-semibold text-rose-700">खर्च</div>
-                        <div className="font-extrabold text-rose-700">
-                          {isExp ? formatCurrency(v.totalAmount) : '-'}
+                    {isExp || isInc ? (
+                      <div className="grid grid-cols-2 gap-2 text-right text-xs">
+                        <div className="rounded-lg border border-rose-200 bg-rose-50 px-2.5 py-1">
+                          <div className="text-[10px] font-semibold text-rose-700">खर्च</div>
+                          <div className="font-extrabold text-rose-700">
+                            {isExp ? formatCurrency(v.totalAmount) : '-'}
+                          </div>
+                        </div>
+                        <div className="rounded-lg border border-emerald-200 bg-emerald-50 px-2.5 py-1">
+                          <div className="text-[10px] font-semibold text-emerald-700">उत्पन्न</div>
+                          <div className="font-extrabold text-emerald-700">
+                            {isInc ? formatCurrency(v.totalAmount) : '-'}
+                          </div>
                         </div>
                       </div>
-                      <div className="rounded-lg border border-emerald-200 bg-emerald-50 px-2.5 py-1">
-                        <div className="text-[10px] font-semibold text-emerald-700">उत्पन्न</div>
-                        <div className="font-extrabold text-emerald-700">
-                          {!isExp ? formatCurrency(v.totalAmount) : '-'}
+                    ) : (
+                      <div className="rounded-lg border border-stone-200 bg-stone-50 px-3 py-1.5 text-right text-xs">
+                        <div className="text-[10px] font-semibold text-stone-600">
+                          {meta.shortLabel}
+                        </div>
+                        <div className={`font-extrabold ${meta.amountClass}`}>
+                          {formatCurrency(v.totalAmount)}
                         </div>
                       </div>
-                    </div>
+                    )}
                   </div>
 
                   <div className="mt-2.5 flex flex-wrap gap-1.5">

@@ -1,4 +1,6 @@
-import type { Voucher } from '../types/farm';
+import type { EntryType, PaymentMode, Voucher } from '../types/farm';
+
+export const GENERAL_PARTY_CROP = 'सामान्य / पार्टी खाते';
 
 export const DEFAULT_CROPS: string[] = [
   'सोयाबीन',
@@ -26,6 +28,86 @@ export const DEFAULT_INCOME_CATEGORIES: string[] = [
   'शासकीय अनुदान',
   'इतर उत्पन्न',
 ];
+
+export const DEFAULT_PARTY_PAYMENT_CATEGORIES: string[] = [
+  'उधारी परतफेड',
+  'मजूर उचल (Advance)',
+  'मजुरी देणे',
+  'उसने दिले / परत',
+  'इतर',
+];
+
+export const DEFAULT_PARTY_RECEIPT_CATEGORIES: string[] = [
+  'उधारी वसुली',
+  'उसने घेतले',
+  'उचल परत',
+  'अ‍ॅडव्हान्स जमा',
+  'इतर',
+];
+
+const PAYMENT_MODE_LABELS: Record<PaymentMode, string> = {
+  रोख: 'रोख (Cash)',
+  उधार: 'उधार (Credit)',
+  UPI: 'UPI (ऑनलाइन)',
+  चेक: 'चेक (Cheque)',
+};
+
+export function getPaymentModeLabel(mode: PaymentMode): string {
+  return PAYMENT_MODE_LABELS[mode] ?? mode;
+}
+
+export interface EntryTypeMeta {
+  label: string;
+  shortLabel: string;
+  englishLabel: string;
+  badgeClass: string;
+  amountClass: string;
+  pdfColor: string;
+  isPartyTransfer: boolean;
+}
+
+const ENTRY_TYPE_META: Record<EntryType, EntryTypeMeta> = {
+  खर्च: {
+    label: 'खर्च (Expense)',
+    shortLabel: 'खर्च',
+    englishLabel: 'Expense',
+    badgeClass: 'bg-rose-100 text-rose-700',
+    amountClass: 'text-rose-600',
+    pdfColor: '#b91c1c',
+    isPartyTransfer: false,
+  },
+  उत्पन्न: {
+    label: 'उत्पन्न (Income)',
+    shortLabel: 'उत्पन्न',
+    englishLabel: 'Income',
+    badgeClass: 'bg-emerald-100 text-emerald-700',
+    amountClass: 'text-emerald-700',
+    pdfColor: '#15803d',
+    isPartyTransfer: false,
+  },
+  'पैसे दिले': {
+    label: 'पैसे दिले (उधारी / उचल)',
+    shortLabel: 'पैसे दिले',
+    englishLabel: 'Party Payment / Advance',
+    badgeClass: 'bg-amber-100 text-amber-800',
+    amountClass: 'text-amber-700',
+    pdfColor: '#b45309',
+    isPartyTransfer: true,
+  },
+  'पैसे घेतले': {
+    label: 'पैसे घेतले (वसुली / जमा)',
+    shortLabel: 'पैसे घेतले',
+    englishLabel: 'Party Receipt / Recovery',
+    badgeClass: 'bg-sky-100 text-sky-800',
+    amountClass: 'text-sky-700',
+    pdfColor: '#0369a1',
+    isPartyTransfer: true,
+  },
+};
+
+export function getEntryTypeMeta(entryType: EntryType): EntryTypeMeta {
+  return ENTRY_TYPE_META[entryType] ?? ENTRY_TYPE_META['खर्च'];
+}
 
 export const MARATHI_MONTHS: string[] = [
   'जानेवारी',

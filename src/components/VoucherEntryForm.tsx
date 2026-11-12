@@ -11,13 +11,21 @@ import {
   Trash2,
 } from 'lucide-react';
 import { useEffect, useMemo, useState } from 'react';
-import { formatCurrency, getTodayISO } from '../data/defaults';
+import {
+  GENERAL_PARTY_CROP,
+  formatCurrency,
+  getEntryTypeMeta,
+  getPaymentModeLabel,
+  getTodayISO,
+} from '../data/defaults';
 import type {
   EntryType,
+  PartyLedgerSummary,
   PaymentMode,
   SettlementType,
   Voucher,
   VoucherItem,
+  VoucherPrefill,
 } from '../types/farm';
 import {
   exportSingleVoucherPdf,
@@ -34,15 +42,20 @@ interface VoucherEntryFormProps {
   crops: string[];
   expenseCategories: string[];
   incomeCategories: string[];
+  partyPaymentCategories: string[];
+  partyReceiptCategories: string[];
   existingParties: string[];
+  partyLedger: PartyLedgerSummary[];
   nextVoucherNo: number;
   editingVoucher: Voucher | null;
+  prefillEntry: VoucherPrefill | null;
   recentVouchers: Voucher[];
   onSaveVoucher: (voucher: Omit<Voucher, 'id' | 'createdAt' | 'updatedAt'>, editingId?: string) => void;
   onCancelEdit: () => void;
   onSelectVoucherToEdit: (voucher: Voucher) => void;
   onDeleteVoucher: (id: string) => void;
   onQuickAddCrop: (cropName: string) => void;
+  onQuickAddCategory: (entryType: EntryType, categoryName: string) => void;
 }
 
 function createEmptyRows(count: number, defaultCategory: string): VoucherItem[] {
@@ -57,65 +70,155 @@ function createEmptyRows(count: number, defaultCategory: string): VoucherItem[] 
   }));
 }
 
+function getCategoriesForEntryType(
+  entryType: EntryType,
+  expenseCategories: string[],
+  incomeCategories: string[],
+  partyPaymentCategories: string[],
+  partyReceiptCategories: string[]
+): string[] {
+  if (entryType === 'खर्च') return expenseCategories;
+  if (entryType === 'उत्पन्न') {
+    return [...incomeCategories, ...expenseCategories.filter((c) => !incomeCategories.includes(c))];
+  }
+  if (entryType === 'पैसे दिले') return partyPaymentCategories;
+  return partyReceiptCategories;
+}
+
+function getDefaultCategoryForType(
+  entryType: EntryType,
+  expenseCategories: string[],
+  incomeCategories: string[],
+  partyPaymentCategories: string[],
+  partyReceiptCategories: string[]
+): string {
+  const list = getCategoriesForEntryType(
+    entryType,
+    expenseCategories,
+    incomeCategories,
+    partyPaymentCategories,
+    partyReceiptCategories
+  );
+  return list[0] || 'इतर';
+}
+
 export function VoucherEntryForm({
   crops,
   expenseCategories,
   incomeCategories,
+  partyPaymentCategories,
+  partyReceiptCategories,
   existingParties,
+  partyLedger,
   nextVoucherNo,
   editingVoucher,
+  prefillEntry,
   recentVouchers,
   onSaveVoucher,
   onCancelEdit,
   onSelectVoucherToEdit,
   onDeleteVoucher,
   onQuickAddCrop,
+  onQuickAddCategory,
 }: VoucherEntryFormProps) {
-  const initialDraft = useMemo(() => (editingVoucher ? null : loadVoucherDraft()), [editingVoucher]);
+  const initialDraft = useMemo(
+    () => (editingVoucher || prefillEntry ? null : loadVoucherDraft()),
+    [editingVoucher, prefillEntry]
+  );
+
+  const initialEntryType: EntryType = prefillEntry?.entryType || initialDraft?.entryType || 'खर्च';
+  const initialDefaultCat = getDefaultCategoryForType(
+    initialEntryType,
+    expenseCategories,
+    incomeCategories,
+    partyPaymentCategories,
+    partyReceiptCategories
+  );
 
   const [voucherNo, setVoucherNo] = useState<number>(
     initialDraft?.voucherNo ?? nextVoucherNo
   );
   const [date, setDate] = useState<string>(initialDraft?.date || getTodayISO());
   const [paymentMode, setPaymentMode] = useState<PaymentMode>(
-    initialDraft?.paymentMode || 'रोख'
+    prefillEntry?.paymentMode || initialDraft?.paymentMode || 'रोख'
   );
-  const [entryType, setEntryType] = useState<EntryType>(
-    initialDraft?.entryType || 'खर्च'
-  );
+  const [paymentRef, setPaymentRef] = useState<string>(initialDraft?.paymentRef || '');
+  const [entryType, setEntryType] = useState<EntryType>(initialEntryType);
   const [settlementType, setSettlementType] = useState<SettlementType>(
-    initialDraft?.settlementType || 'पेमेंट'
+    initialEntryType === 'खर्च' || initialEntryType === 'पैसे दिले'
+      ? 'पेमेंट'
+      : initialDraft?.settlementType || 'जमा'
   );
-  const [partyName, setPartyName] = useState<string>(initialDraft?.partyName || '');
-  const [crop, setCrop] = useState<string>(initialDraft?.crop || crops[0] || 'सोयाबीन');
-  const [items, setItems] = useState<VoucherItem[]>(() =>
-    initialDraft?.items?.length
+  const [partyName, setPartyName] = useState<string>(
+    prefillEntry?.partyName || initialDraft?.partyName || ''
+  );
+  const [crop, setCrop] = useState<string>(
+    prefillEntry
+      ? prefillEntry.entryType === 'पैसे दिले' || prefillEntry.entryType === 'पैसे घेतले'
+        ? GENERAL_PARTY_CROP
+        : crops[0] || 'सोयाबीन'
+      : initialDraft?.crop || crops[0] || 'सोयाबीन'
+  );
+  const [items, setItems] = useState<VoucherItem[]>(() => {
+    if (prefillEntry) {
+      const rows = createEmptyRows(1, prefillEntry.category || initialDefaultCat);
+      if (prefillEntry.suggestedAmount && prefillEntry.suggestedAmount > 0) {
+        rows[0] = {
+          ...rows[0],
+          particular:
+            prefillEntry.particular ||
+            (prefillEntry.entryType === 'पैसे दिले' ? 'मागील उधारी परतफेड' : 'मागील येणे जमा'),
+          category: prefillEntry.category || initialDefaultCat,
+          amount: prefillEntry.suggestedAmount,
+        };
+      }
+      return rows;
+    }
+    const defaultRows =
+      initialEntryType === 'पैसे दिले' || initialEntryType === 'पैसे घेतले' ? 1 : 4;
+    return initialDraft?.items?.length
       ? initialDraft.items
-      : createEmptyRows(4, expenseCategories[0] || 'खत')
-  );
+      : createEmptyRows(defaultRows, initialDefaultCat);
+  });
   const [notes, setNotes] = useState<string>(initialDraft?.notes || '');
+  const [hideQtyRate, setHideQtyRate] = useState(false);
   const [errorMsg, setErrorMsg] = useState<string>('');
   const [successMsg, setSuccessMsg] = useState<string>('');
 
-  // Inline quick crop add & quick edit picker
+  // Inline quick crop/reason add & quick edit picker
   const [showAddCrop, setShowAddCrop] = useState(false);
   const [newCropName, setNewCropName] = useState('');
+  const [showAddReason, setShowAddReason] = useState(false);
+  const [newReasonName, setNewReasonName] = useState('');
   const [showEditPicker, setShowEditPicker] = useState(false);
   const [exportingPdf, setExportingPdf] = useState(false);
   const [exportingAllPdf, setExportingAllPdf] = useState(false);
   const [confirmDeleteEdit, setConfirmDeleteEdit] = useState(false);
   const [confirmDeletePickerId, setConfirmDeletePickerId] = useState<string | null>(null);
 
+  const isPartyTransfer = entryType === 'पैसे दिले' || entryType === 'पैसे घेतले';
+  const showQtyRate = !isPartyTransfer && !hideQtyRate;
+
+  const matchedPartySummary = useMemo(() => {
+    const trimmed = partyName.trim().toLowerCase();
+    if (!trimmed) return null;
+    return partyLedger.find((p) => p.partyName.toLowerCase() === trimmed) ?? null;
+  }, [partyLedger, partyName]);
+
   const hasUnsavedContent =
     !editingVoucher &&
     (partyName.trim() !== '' ||
       notes.trim() !== '' ||
+      paymentRef.trim() !== '' ||
       items.some((it) => it.particular.trim() !== '' || (Number(it.amount) || 0) > 0));
 
-  const availableCategories =
-    entryType === 'खर्च'
-      ? expenseCategories
-      : [...incomeCategories, ...expenseCategories.filter((c) => !incomeCategories.includes(c))];
+  const availableCategories = getCategoriesForEntryType(
+    entryType,
+    expenseCategories,
+    incomeCategories,
+    partyPaymentCategories,
+    partyReceiptCategories
+  );
 
   // Auto-save draft whenever creating a new voucher so switching tabs/pages never loses data
   useEffect(() => {
@@ -124,6 +227,7 @@ export function VoucherEntryForm({
       voucherNo,
       date,
       paymentMode,
+      paymentRef,
       entryType,
       settlementType,
       partyName,
@@ -136,6 +240,7 @@ export function VoucherEntryForm({
     voucherNo,
     date,
     paymentMode,
+    paymentRef,
     entryType,
     settlementType,
     partyName,
@@ -149,6 +254,7 @@ export function VoucherEntryForm({
       setVoucherNo(editingVoucher.voucherNo);
       setDate(editingVoucher.date);
       setPaymentMode(editingVoucher.paymentMode);
+      setPaymentRef(editingVoucher.paymentRef || '');
       setEntryType(editingVoucher.entryType);
       setSettlementType(editingVoucher.settlementType);
       setPartyName(editingVoucher.partyName);
@@ -156,8 +262,18 @@ export function VoucherEntryForm({
       setNotes(editingVoucher.notes || '');
 
       const padded = [...editingVoucher.items];
-      const defCat = editingVoucher.entryType === 'खर्च' ? expenseCategories[0] || 'खत' : incomeCategories[0] || 'पीक विक्री';
-      while (padded.length < 4) {
+      const defCat = getDefaultCategoryForType(
+        editingVoucher.entryType,
+        expenseCategories,
+        incomeCategories,
+        partyPaymentCategories,
+        partyReceiptCategories
+      );
+      const minRows =
+        editingVoucher.entryType === 'पैसे दिले' || editingVoucher.entryType === 'पैसे घेतले'
+          ? 1
+          : 4;
+      while (padded.length < minRows) {
         padded.push({
           id: `row-${Date.now()}-${padded.length}`,
           srNo: padded.length + 1,
@@ -171,7 +287,13 @@ export function VoucherEntryForm({
       setItems(padded.map((it, i) => ({ ...it, srNo: i + 1 })));
       setErrorMsg('');
     }
-  }, [editingVoucher, expenseCategories, incomeCategories]);
+  }, [
+    editingVoucher,
+    expenseCategories,
+    incomeCategories,
+    partyPaymentCategories,
+    partyReceiptCategories,
+  ]);
 
   const resetForm = () => {
     clearVoucherDraft();
@@ -179,6 +301,7 @@ export function VoucherEntryForm({
     setVoucherNo(nextVoucherNo);
     setDate(getTodayISO());
     setPaymentMode('रोख');
+    setPaymentRef('');
     setEntryType('खर्च');
     setSettlementType('पेमेंट');
     setPartyName('');
@@ -195,6 +318,7 @@ export function VoucherEntryForm({
       setVoucherNo(draft.voucherNo);
       setDate(draft.date);
       setPaymentMode(draft.paymentMode);
+      setPaymentRef(draft.paymentRef || '');
       setEntryType(draft.entryType);
       setSettlementType(draft.settlementType);
       setPartyName(draft.partyName);
@@ -208,23 +332,61 @@ export function VoucherEntryForm({
 
   const handleEntryTypeChange = (nextType: EntryType) => {
     setEntryType(nextType);
-    setSettlementType(nextType === 'खर्च' ? 'पेमेंट' : 'जमा');
-    const defaultCat =
-      nextType === 'खर्च'
-        ? expenseCategories[0] || 'खत'
-        : incomeCategories[0] || 'पीक विक्री';
-    setItems((prev) =>
-      prev.map((row) =>
-        !row.particular.trim() && row.amount === 0 ? { ...row, category: defaultCat } : row
-      )
+    const nextIsTransfer = nextType === 'पैसे दिले' || nextType === 'पैसे घेतले';
+    setSettlementType(nextType === 'खर्च' || nextType === 'पैसे दिले' ? 'पेमेंट' : 'जमा');
+    if (nextIsTransfer && paymentMode === 'उधार') {
+      setPaymentMode('रोख');
+    }
+    if (nextIsTransfer && !crop) {
+      setCrop(GENERAL_PARTY_CROP);
+    } else if (!nextIsTransfer && crop === GENERAL_PARTY_CROP) {
+      setCrop(crops[0] || 'सोयाबीन');
+    }
+
+    const defaultCat = getDefaultCategoryForType(
+      nextType,
+      expenseCategories,
+      incomeCategories,
+      partyPaymentCategories,
+      partyReceiptCategories
     );
+    setItems((prev) => {
+      const updated = prev.map((row) =>
+        !row.particular.trim() && row.amount === 0
+          ? { ...row, category: defaultCat, qty: nextIsTransfer ? '' : row.qty, rate: nextIsTransfer ? '' : row.rate }
+          : row
+      );
+      if (nextIsTransfer) {
+        const nonEmpty = updated.filter((r) => r.particular.trim() !== '' || r.amount > 0);
+        return (nonEmpty.length > 0 ? nonEmpty : [updated[0]]).map((r, i) => ({
+          ...r,
+          srNo: i + 1,
+        }));
+      }
+      const padded = [...updated];
+      while (padded.length < 4) {
+        padded.push({
+          id: `row-${Date.now()}-${padded.length}-${Math.random().toString(36).slice(2, 6)}`,
+          srNo: padded.length + 1,
+          particular: '',
+          category: defaultCat,
+          qty: '',
+          rate: '',
+          amount: 0,
+        });
+      }
+      return padded;
+    });
   };
 
   const updateRow = (id: string, field: keyof VoucherItem, value: string | number) => {
-    const defCat =
-      entryType === 'खर्च'
-        ? expenseCategories[0] || 'खत'
-        : incomeCategories[0] || 'पीक विक्री';
+    const defCat = getDefaultCategoryForType(
+      entryType,
+      expenseCategories,
+      incomeCategories,
+      partyPaymentCategories,
+      partyReceiptCategories
+    );
 
     setItems((prev) => {
       const next = prev.map((row) => {
@@ -242,9 +404,10 @@ export function VoucherEntryForm({
         return updated;
       });
 
-      // Auto-add a new blank row whenever user types in the last row
+      // Auto-add a new blank row whenever user types in the last row (for item bills)
       const lastRow = next[next.length - 1];
       if (
+        !isPartyTransfer &&
         lastRow &&
         lastRow.id === id &&
         field !== 'category' &&
@@ -269,10 +432,13 @@ export function VoucherEntryForm({
   };
 
   const addRow = () => {
-    const defCat =
-      entryType === 'खर्च'
-        ? expenseCategories[0] || 'खत'
-        : incomeCategories[0] || 'पीक विक्री';
+    const defCat = getDefaultCategoryForType(
+      entryType,
+      expenseCategories,
+      incomeCategories,
+      partyPaymentCategories,
+      partyReceiptCategories
+    );
     setItems((prev) => [
       ...prev,
       {
@@ -302,12 +468,19 @@ export function VoucherEntryForm({
     e.preventDefault();
     setErrorMsg('');
 
+    if (isPartyTransfer && !partyName.trim()) {
+      setErrorMsg('कृपया पार्टीचे किंवा मजुराचे नाव भरा.');
+      return;
+    }
+
     const filledItems = items
       .filter((it) => it.particular.trim() !== '' || (Number(it.amount) || 0) > 0)
       .map((it, idx) => ({
         ...it,
         srNo: idx + 1,
-        particular: it.particular.trim() || `${it.category} खर्च`,
+        particular:
+          it.particular.trim() ||
+          (entryType === 'खर्च' ? `${it.category} खर्च` : it.category),
         amount: Number(it.amount) || 0,
       }));
 
@@ -316,7 +489,7 @@ export function VoucherEntryForm({
       return;
     }
 
-    if (!crop.trim()) {
+    if (!isPartyTransfer && !crop.trim()) {
       setErrorMsg('कृपया पीक निवडा.');
       return;
     }
@@ -327,15 +500,19 @@ export function VoucherEntryForm({
       return;
     }
 
+    const normalizedRef =
+      paymentMode === 'UPI' || paymentMode === 'चेक' ? paymentRef.trim() || undefined : undefined;
+
     onSaveVoucher(
       {
         voucherNo: Number(voucherNo) || nextVoucherNo,
         date: date || getTodayISO(),
         paymentMode,
+        paymentRef: normalizedRef,
         entryType,
         settlementType,
         partyName: partyName.trim() || 'रोख व्यवहार',
-        crop: crop.trim(),
+        crop: crop.trim() || GENERAL_PARTY_CROP,
         items: filledItems,
         totalAmount: computedTotal,
         notes: notes.trim() || undefined,
@@ -355,13 +532,18 @@ export function VoucherEntryForm({
       clearVoucherDraft();
       setVoucherNo((prev) => prev + 1);
       setPartyName('');
+      setPaymentRef('');
       setNotes('');
       setItems(
         createEmptyRows(
-          4,
-          entryType === 'खर्च'
-            ? expenseCategories[0] || 'खत'
-            : incomeCategories[0] || 'पीक विक्री'
+          isPartyTransfer ? 1 : 4,
+          getDefaultCategoryForType(
+            entryType,
+            expenseCategories,
+            incomeCategories,
+            partyPaymentCategories,
+            partyReceiptCategories
+          )
         )
       );
     }
@@ -374,6 +556,25 @@ export function VoucherEntryForm({
     setCrop(trimmed);
     setNewCropName('');
     setShowAddCrop(false);
+  };
+
+  const handleAddNewReason = () => {
+    const trimmed = newReasonName.trim();
+    if (!trimmed) return;
+    onQuickAddCategory(entryType, trimmed);
+    setItems((prev) =>
+      prev.map((row, idx) =>
+        idx === 0
+          ? {
+              ...row,
+              category: trimmed,
+              particular: isPartyTransfer && !row.particular.trim() ? trimmed : row.particular,
+            }
+          : row
+      )
+    );
+    setNewReasonName('');
+    setShowAddReason(false);
   };
 
   const handleDownloadVoucherPdf = async () => {
@@ -392,10 +593,12 @@ export function VoucherEntryForm({
         voucherNo: Number(voucherNo) || nextVoucherNo,
         date: date || getTodayISO(),
         paymentMode,
+        paymentRef:
+          paymentMode === 'UPI' || paymentMode === 'चेक' ? paymentRef.trim() || undefined : undefined,
         entryType,
         settlementType,
         partyName: partyName.trim() || 'रोख व्यवहार',
-        crop: crop.trim() || crops[0] || 'सोयाबीन',
+        crop: crop.trim() || (isPartyTransfer ? GENERAL_PARTY_CROP : crops[0] || 'सोयाबीन'),
         items: filledItems,
         totalAmount: filledItems.reduce((s, i) => s + i.amount, 0),
         notes: notes.trim() || undefined,
@@ -545,9 +748,7 @@ export function VoucherEntryForm({
                   </div>
                 </button>
                 <span
-                  className={`shrink-0 font-bold ${
-                    v.entryType === 'खर्च' ? 'text-rose-600' : 'text-emerald-700'
-                  }`}
+                  className={`shrink-0 font-bold ${getEntryTypeMeta(v.entryType).amountClass}`}
                 >
                   {formatCurrency(v.totalAmount)}
                 </span>
@@ -608,29 +809,54 @@ export function VoucherEntryForm({
         {/* Top Voucher Header Controls (Matches User Format) */}
         <div className="border-b border-stone-200 bg-stone-50/70 p-4 sm:p-6">
           <div className="grid gap-4 md:grid-cols-2">
-            {/* Left Side: Cash/Credit & Payment/Received */}
+            {/* Left Side: Payment Mode (Cash/Credit/UPI/Cheque) & Payment/Received */}
             <div className="space-y-3">
               <div>
                 <label className="mb-1.5 block text-xs font-bold text-stone-600">
-                  व्यवहार प्रकार (रोख / उधार)
+                  व्यवहार / पेमेंट माध्यम (रोख / उधार / UPI / चेक)
                 </label>
-                <div className="grid grid-cols-2 gap-2">
-                  {(['रोख', 'उधार'] as PaymentMode[]).map((mode) => (
-                    <button
-                      key={mode}
-                      type="button"
-                      onClick={() => setPaymentMode(mode)}
-                      className={`rounded-xl border px-3 py-2.5 text-sm font-bold transition ${
-                        paymentMode === mode
-                          ? 'border-emerald-600 bg-emerald-600 text-white shadow-sm'
-                          : 'border-stone-300 bg-white text-stone-700 hover:bg-stone-100'
-                      }`}
-                    >
-                      {mode === 'रोख' ? 'रोख (Cash)' : 'उधार (Credit)'}
-                    </button>
-                  ))}
+                <div className={`grid gap-2 ${isPartyTransfer ? 'grid-cols-3' : 'grid-cols-2 sm:grid-cols-4'}`}>
+                  {(['रोख', 'उधार', 'UPI', 'चेक'] as PaymentMode[])
+                    .filter((mode) => !(isPartyTransfer && mode === 'उधार'))
+                    .map((mode) => (
+                      <button
+                        key={mode}
+                        type="button"
+                        onClick={() => setPaymentMode(mode)}
+                        className={`rounded-xl border px-2.5 py-2.5 text-xs sm:text-sm font-bold transition ${
+                          paymentMode === mode
+                            ? mode === 'उधार'
+                              ? 'border-amber-600 bg-amber-600 text-white shadow-sm'
+                              : 'border-emerald-600 bg-emerald-600 text-white shadow-sm'
+                            : 'border-stone-300 bg-white text-stone-700 hover:bg-stone-100'
+                        }`}
+                      >
+                        {getPaymentModeLabel(mode)}
+                      </button>
+                    ))}
                 </div>
               </div>
+
+              {(paymentMode === 'UPI' || paymentMode === 'चेक') && (
+                <div>
+                  <label className="mb-1 block text-xs font-bold text-stone-600">
+                    {paymentMode === 'चेक'
+                      ? 'चेक क्रमांक / बँकेचे नाव (ऐच्छिक)'
+                      : 'UPI संदर्भ क्र. / अ‍ॅप (ऐच्छिक)'}
+                  </label>
+                  <input
+                    type="text"
+                    placeholder={
+                      paymentMode === 'चेक'
+                        ? 'उदा. चेक क्र. 458210 — SBI'
+                        : 'उदा. PhonePe / GPay Ref 4125...'
+                    }
+                    value={paymentRef}
+                    onChange={(e) => setPaymentRef(e.target.value)}
+                    className="entry-field w-full rounded-xl px-3 py-2 text-sm text-stone-900 placeholder:text-stone-400"
+                  />
+                </div>
+              )}
 
               <div>
                 <label className="mb-1.5 block text-xs font-bold text-stone-600">
@@ -655,17 +881,17 @@ export function VoucherEntryForm({
               </div>
             </div>
 
-            {/* Right Side: Expense/Income & Voucher No / Date */}
+            {/* Right Side: Entry Type (4 options) & Voucher No / Date */}
             <div className="space-y-3">
               <div>
                 <label className="mb-1.5 block text-xs font-bold text-stone-600">
-                  नोंद प्रकार (खर्च / उत्पन्न)
+                  नोंद प्रकार (खर्च / उत्पन्न / पार्टी देणे-घेणे)
                 </label>
                 <div className="grid grid-cols-2 gap-2">
                   <button
                     type="button"
                     onClick={() => handleEntryTypeChange('खर्च')}
-                    className={`rounded-xl border px-3 py-2.5 text-sm font-bold transition ${
+                    className={`rounded-xl border px-2.5 py-2 text-xs sm:text-sm font-bold transition ${
                       entryType === 'खर्च'
                         ? 'border-rose-600 bg-rose-600 text-white shadow-sm'
                         : 'border-stone-300 bg-white text-stone-700 hover:bg-rose-50'
@@ -676,7 +902,7 @@ export function VoucherEntryForm({
                   <button
                     type="button"
                     onClick={() => handleEntryTypeChange('उत्पन्न')}
-                    className={`rounded-xl border px-3 py-2.5 text-sm font-bold transition ${
+                    className={`rounded-xl border px-2.5 py-2 text-xs sm:text-sm font-bold transition ${
                       entryType === 'उत्पन्न'
                         ? 'border-emerald-600 bg-emerald-600 text-white shadow-sm'
                         : 'border-stone-300 bg-white text-stone-700 hover:bg-emerald-50'
@@ -684,7 +910,36 @@ export function VoucherEntryForm({
                   >
                     उत्पन्न (Income)
                   </button>
+                  <button
+                    type="button"
+                    onClick={() => handleEntryTypeChange('पैसे दिले')}
+                    className={`rounded-xl border px-2.5 py-2 text-xs sm:text-sm font-bold transition ${
+                      entryType === 'पैसे दिले'
+                        ? 'border-amber-600 bg-amber-600 text-white shadow-sm'
+                        : 'border-stone-300 bg-white text-stone-700 hover:bg-amber-50'
+                    }`}
+                  >
+                    पैसे दिले (उधारी / उचल)
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => handleEntryTypeChange('पैसे घेतले')}
+                    className={`rounded-xl border px-2.5 py-2 text-xs sm:text-sm font-bold transition ${
+                      entryType === 'पैसे घेतले'
+                        ? 'border-sky-600 bg-sky-600 text-white shadow-sm'
+                        : 'border-stone-300 bg-white text-stone-700 hover:bg-sky-50'
+                    }`}
+                  >
+                    पैसे घेतले (वसुली / जमा)
+                  </button>
                 </div>
+                {isPartyTransfer && (
+                  <p className="mt-1.5 rounded-lg border border-amber-200 bg-amber-50/80 px-2.5 py-1.5 text-[11px] font-semibold text-amber-900">
+                    {entryType === 'पैसे दिले'
+                      ? 'टीप: जुनी उधारी परत केली किंवा पार्टी/मजुराला उचल दिली तर ही नोंद पीक खर्चात दुबार मोजली जाणार नाही — फक्त पार्टीचे खाते अद्ययावत होईल.'
+                      : 'टीप: पार्टी/मजुराकडून उधारी वसुली किंवा उसने पैसे घेतले तर ही नोंद पीक उत्पन्नात न मोजता फक्त पार्टी खात्यात जमा होईल.'}
+                  </p>
+                )}
               </div>
 
               <div className="grid grid-cols-2 gap-3">
@@ -701,7 +956,7 @@ export function VoucherEntryForm({
                       if (e.key === 'ArrowUp' || e.key === 'ArrowDown') e.preventDefault();
                     }}
                     onChange={(e) => setVoucherNo(Number(e.target.value))}
-                    className="w-full rounded-xl border border-stone-300 bg-white px-3 py-2 text-sm font-bold text-stone-900 focus:border-emerald-500 focus:outline-none focus:ring-2 focus:ring-emerald-200"
+                    className="entry-field w-full rounded-xl px-3 py-2 text-sm font-bold text-stone-900"
                   />
                 </div>
                 <div>
@@ -710,7 +965,7 @@ export function VoucherEntryForm({
                     type="date"
                     value={date}
                     onChange={(e) => setDate(e.target.value)}
-                    className="w-full rounded-xl border border-stone-300 bg-white px-3 py-2 text-sm font-semibold text-stone-900 focus:border-emerald-500 focus:outline-none focus:ring-2 focus:ring-emerald-200"
+                    className="entry-field w-full rounded-xl px-3 py-2 text-sm font-semibold text-stone-900"
                   />
                 </div>
               </div>
@@ -721,7 +976,7 @@ export function VoucherEntryForm({
           <div className="mt-4 grid gap-4 md:grid-cols-2">
             <div>
               <label className="mb-1 block text-xs font-bold text-stone-700">
-                पार्टीचे नाव (Party Name — दुकान / व्यापारी / मजूर)
+                पार्टीचे नाव (Party / मजूर — दुकान / व्यापारी / मजूर){isPartyTransfer ? ' *' : ''}
               </label>
               <input
                 type="text"
@@ -729,18 +984,68 @@ export function VoucherEntryForm({
                 placeholder="उदा. महालक्ष्मी कृषी सेवा केंद्र / रामराव पाटील"
                 value={partyName}
                 onChange={(e) => setPartyName(e.target.value)}
-                className="w-full rounded-xl border border-stone-300 bg-white px-3.5 py-2.5 text-sm text-stone-900 placeholder:text-stone-400 focus:border-emerald-500 focus:outline-none focus:ring-2 focus:ring-emerald-200"
+                className="entry-field w-full rounded-xl px-3.5 py-2.5 text-sm text-stone-900 placeholder:text-stone-400"
               />
               <datalist id="party-suggestions">
                 {existingParties.map((p) => (
                   <option key={p} value={p} />
                 ))}
               </datalist>
+              {matchedPartySummary && matchedPartySummary.netBalance !== 0 && (
+                <div className="mt-1.5 flex flex-wrap items-center justify-between gap-2 rounded-lg border border-stone-200 bg-white px-3 py-1.5 text-xs">
+                  <span className="font-bold text-stone-700">
+                    {matchedPartySummary.netBalance > 0 ? (
+                      <>
+                        सध्या देणे बाकी:{' '}
+                        <span className="text-rose-600">
+                          {formatCurrency(matchedPartySummary.netBalance)}
+                        </span>
+                      </>
+                    ) : (
+                      <>
+                        सध्या येणे / उचल बाकी:{' '}
+                        <span className="text-emerald-700">
+                          {formatCurrency(Math.abs(matchedPartySummary.netBalance))}
+                        </span>
+                      </>
+                    )}
+                  </span>
+                  {((entryType === 'पैसे दिले' && matchedPartySummary.netBalance > 0) ||
+                    (entryType === 'पैसे घेतले' && matchedPartySummary.netBalance < 0)) && (
+                    <button
+                      type="button"
+                      onClick={() => {
+                        const bal = Math.abs(matchedPartySummary.netBalance);
+                        setItems((prev) =>
+                          prev.map((row, idx) =>
+                            idx === 0
+                              ? {
+                                  ...row,
+                                  particular:
+                                    row.particular.trim() ||
+                                    (entryType === 'पैसे दिले'
+                                      ? 'मागील उधारी परतफेड'
+                                      : 'मागील येणे जमा'),
+                                  amount: bal,
+                                }
+                              : row
+                          )
+                        );
+                      }}
+                      className="rounded-md bg-emerald-100 px-2 py-0.5 text-[11px] font-bold text-emerald-800 hover:bg-emerald-200"
+                    >
+                      बाकी {formatCurrency(Math.abs(matchedPartySummary.netBalance))} भरा
+                    </button>
+                  )}
+                </div>
+              )}
             </div>
 
             <div>
               <div className="mb-1 flex items-center justify-between">
-                <label className="text-xs font-bold text-stone-700">पीक निवडा (Crop)</label>
+                <label className="text-xs font-bold text-stone-700">
+                  {isPartyTransfer ? 'पीक / खाते निवडा (ऐच्छिक)' : 'पीक निवडा (Crop)'}
+                </label>
                 <button
                   type="button"
                   onClick={() => setShowAddCrop((s) => !s)}
@@ -756,7 +1061,7 @@ export function VoucherEntryForm({
                     placeholder="नवीन पिकाचे नाव..."
                     value={newCropName}
                     onChange={(e) => setNewCropName(e.target.value)}
-                    className="flex-1 rounded-xl border border-emerald-400 bg-white px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-emerald-200"
+                    className="entry-field flex-1 rounded-xl px-3 py-2 text-sm text-stone-900 placeholder:text-stone-400"
                   />
                   <button
                     type="button"
@@ -777,8 +1082,11 @@ export function VoucherEntryForm({
                 <select
                   value={crop}
                   onChange={(e) => setCrop(e.target.value)}
-                  className="w-full rounded-xl border border-stone-300 bg-white px-3.5 py-2.5 text-sm font-bold text-stone-900 focus:border-emerald-500 focus:outline-none focus:ring-2 focus:ring-emerald-200"
+                  className="entry-field w-full rounded-xl px-3.5 py-2.5 text-sm font-bold text-stone-900"
                 >
+                  {isPartyTransfer && (
+                    <option value={GENERAL_PARTY_CROP}>{GENERAL_PARTY_CROP}</option>
+                  )}
                   {crops.map((c) => (
                     <option key={c} value={c}>
                       {c}
@@ -790,18 +1098,132 @@ export function VoucherEntryForm({
           </div>
         </div>
 
-        {/* Desktop Table View (Sr.No | Particular | Category | Qty | Rate | Amount) */}
+        {/* Payment/Receipt Quick Presets + Add Extra Reason + Qty/Rate Toggle Bar */}
+        <div className="border-b border-stone-200 bg-white px-4 py-2.5 sm:px-6">
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            {isPartyTransfer ? (
+              <div className="flex flex-wrap items-center gap-1.5">
+                <span className="text-[11px] font-bold text-stone-500 mr-1">
+                  जलद कारण निवडा:
+                </span>
+                {availableCategories
+                  .filter((c) => c !== 'इतर')
+                  .map((preset) => (
+                    <button
+                      key={preset}
+                      type="button"
+                      onClick={() => {
+                        setItems((prev) =>
+                          prev.map((row, idx) =>
+                            idx === 0
+                              ? { ...row, category: preset, particular: preset }
+                              : row
+                          )
+                        );
+                      }}
+                      className="rounded-lg border border-emerald-200 bg-emerald-50 px-2.5 py-1 text-xs font-bold text-emerald-800 hover:bg-emerald-100"
+                    >
+                      + {preset}
+                    </button>
+                  ))}
+                <button
+                  type="button"
+                  onClick={() => setShowAddReason((v) => !v)}
+                  className="rounded-lg border border-dashed border-emerald-500 bg-white px-2.5 py-1 text-xs font-bold text-emerald-700 hover:bg-emerald-50"
+                >
+                  + नवीन कारण जोडा
+                </button>
+              </div>
+            ) : (
+              <div className="flex flex-wrap items-center gap-2">
+                <span className="text-xs font-bold text-stone-500">
+                  तपशील व रक्कम (प्रमाण व दर टाकल्यास रक्कम आपोआप मोजली जाईल)
+                </span>
+                <button
+                  type="button"
+                  onClick={() => setShowAddReason((v) => !v)}
+                  className="rounded-lg border border-dashed border-emerald-500 bg-white px-2.5 py-1 text-xs font-bold text-emerald-700 hover:bg-emerald-50"
+                >
+                  + नवीन प्रकार जोडा
+                </button>
+              </div>
+            )}
+
+            {!isPartyTransfer && (
+              <button
+                type="button"
+                onClick={() => setHideQtyRate((v) => !v)}
+                className="rounded-lg border border-stone-300 bg-stone-50 px-2.5 py-1 text-xs font-bold text-stone-700 hover:bg-stone-100"
+              >
+                {hideQtyRate ? 'प्रमाण / दर दाखवा' : 'फक्त रक्कम भरा (प्रमाण/दर लपवा)'}
+              </button>
+            )}
+          </div>
+
+          {showAddReason && (
+            <div className="mt-2.5 flex flex-wrap items-center gap-2 rounded-xl border border-emerald-200 bg-emerald-50/70 p-2">
+              <input
+                type="text"
+                value={newReasonName}
+                onChange={(e) => setNewReasonName(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter') {
+                    e.preventDefault();
+                    handleAddNewReason();
+                  }
+                }}
+                placeholder={
+                  isPartyTransfer
+                    ? 'नवीन कारण लिहा (उदा. ट्रॅक्टर भाडे / बियाणे उधार / उसने परत)'
+                    : 'नवीन प्रकार लिहा (उदा. ड्रोन फवारणी / वाहतूक)'
+                }
+                className="entry-field min-w-[230px] flex-1 rounded-lg px-3 py-1.5 text-sm font-medium outline-none focus:border-emerald-600 focus:bg-white"
+              />
+              <button
+                type="button"
+                onClick={handleAddNewReason}
+                className="rounded-lg bg-emerald-700 px-3 py-1.5 text-xs font-bold text-white hover:bg-emerald-800"
+              >
+                जोडा
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  setShowAddReason(false);
+                  setNewReasonName('');
+                }}
+                className="rounded-lg border border-stone-300 bg-white px-2.5 py-1.5 text-xs font-bold text-stone-600 hover:bg-stone-100"
+              >
+                रद्द
+              </button>
+            </div>
+          )}
+        </div>
+
+        {/* Desktop Table View */}
         <div className="hidden md:block overflow-x-auto p-3 sm:p-4">
           <table className="w-full border-collapse border border-stone-300 text-sm">
             <thead>
               <tr className="bg-emerald-50 text-stone-800">
                 <th className="w-16 border border-stone-300 px-3 py-3 text-center font-bold">अ.क्र.</th>
-                <th className="border border-stone-300 px-3 py-3 text-left font-bold">तपशील (Particular)</th>
-                <th className="w-44 border border-stone-300 px-3 py-3 text-left font-bold">प्रकार (Category)</th>
-                <th className="w-28 border border-stone-300 px-3 py-3 text-right font-bold">नग / प्रमाण</th>
-                <th className="w-32 border border-stone-300 px-3 py-3 text-right font-bold">दर (₹)</th>
-                <th className="w-36 border border-stone-300 px-3 py-3 text-right font-bold">
-                  {entryType === 'खर्च' ? 'खर्च रक्कम (₹)' : 'उत्पन्न रक्कम (₹)'}
+                <th className="border border-stone-300 px-3 py-3 text-left font-bold">
+                  {isPartyTransfer ? 'तपशील / कारण (Particular)' : 'तपशील (Particular)'}
+                </th>
+                <th className="w-48 border border-stone-300 px-3 py-3 text-left font-bold">प्रकार (Category)</th>
+                {showQtyRate && (
+                  <>
+                    <th className="w-28 border border-stone-300 px-3 py-3 text-right font-bold">नग / प्रमाण</th>
+                    <th className="w-32 border border-stone-300 px-3 py-3 text-right font-bold">दर (₹)</th>
+                  </>
+                )}
+                <th className="w-40 border border-stone-300 px-3 py-3 text-right font-bold">
+                  {entryType === 'खर्च'
+                    ? 'खर्च रक्कम (₹)'
+                    : entryType === 'उत्पन्न'
+                      ? 'उत्पन्न रक्कम (₹)'
+                      : entryType === 'पैसे दिले'
+                        ? 'दिलेली रक्कम (₹)'
+                        : 'घेतलेली रक्कम (₹)'}
                 </th>
                 <th className="w-12 border border-stone-300 px-2 py-3 text-center font-bold"></th>
               </tr>
@@ -815,17 +1237,21 @@ export function VoucherEntryForm({
                   <td className="border border-stone-300 px-2 py-2">
                     <input
                       type="text"
-                      placeholder="उदा. युरिया खत, नांगरणी, फवारणी..."
+                      placeholder={
+                        isPartyTransfer
+                          ? 'उदा. मागील उधारी परतफेड, मजूर उचल, चेक पेमेंट...'
+                          : 'उदा. युरिया खत, नांगरणी, फवारणी...'
+                      }
                       value={item.particular}
                       onChange={(e) => updateRow(item.id, 'particular', e.target.value)}
-                      className="w-full rounded-lg border border-stone-200 bg-white px-3 py-2 text-sm text-stone-900 focus:border-emerald-500 focus:outline-none"
+                      className="entry-field w-full rounded-lg px-3 py-2 text-sm text-stone-900 placeholder:text-stone-400"
                     />
                   </td>
                   <td className="border border-stone-300 px-2 py-2">
                     <select
                       value={item.category}
                       onChange={(e) => updateRow(item.id, 'category', e.target.value)}
-                      className="w-full rounded-lg border border-stone-200 bg-white px-2.5 py-2 text-sm font-medium text-stone-900 focus:border-emerald-500 focus:outline-none"
+                      className="entry-field w-full rounded-lg px-2.5 py-2 text-sm font-medium text-stone-900"
                     >
                       {availableCategories.map((cat) => (
                         <option key={cat} value={cat}>
@@ -834,36 +1260,40 @@ export function VoucherEntryForm({
                       ))}
                     </select>
                   </td>
-                  <td className="border border-stone-300 px-2 py-2">
-                    <input
-                      type="number"
-                      step="any"
-                      min="0"
-                      placeholder="0"
-                      value={item.qty}
-                      onWheel={(e) => e.currentTarget.blur()}
-                      onKeyDown={(e) => {
-                        if (e.key === 'ArrowUp' || e.key === 'ArrowDown') e.preventDefault();
-                      }}
-                      onChange={(e) => updateRow(item.id, 'qty', e.target.value)}
-                      className="w-full rounded-lg border border-stone-200 bg-white px-2.5 py-2 text-right text-sm text-stone-900 focus:border-emerald-500 focus:outline-none"
-                    />
-                  </td>
-                  <td className="border border-stone-300 px-2 py-2">
-                    <input
-                      type="number"
-                      step="any"
-                      min="0"
-                      placeholder="0"
-                      value={item.rate}
-                      onWheel={(e) => e.currentTarget.blur()}
-                      onKeyDown={(e) => {
-                        if (e.key === 'ArrowUp' || e.key === 'ArrowDown') e.preventDefault();
-                      }}
-                      onChange={(e) => updateRow(item.id, 'rate', e.target.value)}
-                      className="w-full rounded-lg border border-stone-200 bg-white px-2.5 py-2 text-right text-sm text-stone-900 focus:border-emerald-500 focus:outline-none"
-                    />
-                  </td>
+                  {showQtyRate && (
+                    <>
+                      <td className="border border-stone-300 px-2 py-2">
+                        <input
+                          type="number"
+                          step="any"
+                          min="0"
+                          placeholder="0"
+                          value={item.qty}
+                          onWheel={(e) => e.currentTarget.blur()}
+                          onKeyDown={(e) => {
+                            if (e.key === 'ArrowUp' || e.key === 'ArrowDown') e.preventDefault();
+                          }}
+                          onChange={(e) => updateRow(item.id, 'qty', e.target.value)}
+                          className="entry-field w-full rounded-lg px-2.5 py-2 text-right text-sm text-stone-900 placeholder:text-stone-400"
+                        />
+                      </td>
+                      <td className="border border-stone-300 px-2 py-2">
+                        <input
+                          type="number"
+                          step="any"
+                          min="0"
+                          placeholder="0"
+                          value={item.rate}
+                          onWheel={(e) => e.currentTarget.blur()}
+                          onKeyDown={(e) => {
+                            if (e.key === 'ArrowUp' || e.key === 'ArrowDown') e.preventDefault();
+                          }}
+                          onChange={(e) => updateRow(item.id, 'rate', e.target.value)}
+                          className="entry-field w-full rounded-lg px-2.5 py-2 text-right text-sm text-stone-900 placeholder:text-stone-400"
+                        />
+                      </td>
+                    </>
+                  )}
                   <td className="border border-stone-300 px-2 py-2">
                     <input
                       type="number"
@@ -876,7 +1306,7 @@ export function VoucherEntryForm({
                         if (e.key === 'ArrowUp' || e.key === 'ArrowDown') e.preventDefault();
                       }}
                       onChange={(e) => updateRow(item.id, 'amount', parseFloat(e.target.value) || 0)}
-                      className="w-full rounded-lg border border-stone-300 bg-stone-50 px-2.5 py-2 text-right text-sm font-bold text-stone-900 focus:border-emerald-500 focus:bg-white focus:outline-none"
+                      className="entry-field w-full rounded-lg px-2.5 py-2 text-right text-sm font-bold text-stone-900 placeholder:text-stone-400"
                     />
                   </td>
                   <td className="border border-stone-300 px-2 py-2 text-center">
@@ -920,15 +1350,19 @@ export function VoucherEntryForm({
               <div className="grid grid-cols-1 gap-2">
                 <input
                   type="text"
-                  placeholder="तपशील (उदा. युरिया खत, मजुरी)"
+                  placeholder={
+                    isPartyTransfer
+                      ? 'तपशील / कारण (उदा. उधारी परतफेड, मजूर उचल)'
+                      : 'तपशील (उदा. युरिया खत, मजुरी)'
+                  }
                   value={item.particular}
                   onChange={(e) => updateRow(item.id, 'particular', e.target.value)}
-                  className="w-full rounded-xl border border-stone-300 px-3 py-2 text-sm focus:border-emerald-500 focus:outline-none"
+                  className="entry-field w-full rounded-xl px-3 py-2 text-sm text-stone-900 placeholder:text-stone-400"
                 />
                 <select
                   value={item.category}
                   onChange={(e) => updateRow(item.id, 'category', e.target.value)}
-                  className="w-full rounded-xl border border-stone-300 bg-white px-3 py-2 text-sm font-semibold focus:border-emerald-500 focus:outline-none"
+                  className="entry-field w-full rounded-xl px-3 py-2 text-sm font-semibold text-stone-900"
                 >
                   {availableCategories.map((cat) => (
                     <option key={cat} value={cat}>
@@ -938,43 +1372,47 @@ export function VoucherEntryForm({
                 </select>
               </div>
 
-              <div className="grid grid-cols-3 gap-2">
-                <div>
-                  <label className="mb-0.5 block text-[11px] font-semibold text-stone-500">
-                    नग / प्रमाण
-                  </label>
-                  <input
-                    type="number"
-                    step="any"
-                    min="0"
-                    placeholder="0"
-                    value={item.qty}
-                    onWheel={(e) => e.currentTarget.blur()}
-                    onKeyDown={(e) => {
-                      if (e.key === 'ArrowUp' || e.key === 'ArrowDown') e.preventDefault();
-                    }}
-                    onChange={(e) => updateRow(item.id, 'qty', e.target.value)}
-                    className="w-full rounded-xl border border-stone-300 px-2.5 py-2 text-right text-sm focus:border-emerald-500 focus:outline-none"
-                  />
-                </div>
-                <div>
-                  <label className="mb-0.5 block text-[11px] font-semibold text-stone-500">
-                    दर (₹)
-                  </label>
-                  <input
-                    type="number"
-                    step="any"
-                    min="0"
-                    placeholder="0"
-                    value={item.rate}
-                    onWheel={(e) => e.currentTarget.blur()}
-                    onKeyDown={(e) => {
-                      if (e.key === 'ArrowUp' || e.key === 'ArrowDown') e.preventDefault();
-                    }}
-                    onChange={(e) => updateRow(item.id, 'rate', e.target.value)}
-                    className="w-full rounded-xl border border-stone-300 px-2.5 py-2 text-right text-sm focus:border-emerald-500 focus:outline-none"
-                  />
-                </div>
+              <div className={`grid gap-2 ${showQtyRate ? 'grid-cols-3' : 'grid-cols-1'}`}>
+                {showQtyRate && (
+                  <>
+                    <div>
+                      <label className="mb-0.5 block text-[11px] font-semibold text-stone-500">
+                        नग / प्रमाण
+                      </label>
+                      <input
+                        type="number"
+                        step="any"
+                        min="0"
+                        placeholder="0"
+                        value={item.qty}
+                        onWheel={(e) => e.currentTarget.blur()}
+                        onKeyDown={(e) => {
+                          if (e.key === 'ArrowUp' || e.key === 'ArrowDown') e.preventDefault();
+                        }}
+                        onChange={(e) => updateRow(item.id, 'qty', e.target.value)}
+                        className="entry-field w-full rounded-xl px-2.5 py-2 text-right text-sm text-stone-900 placeholder:text-stone-400"
+                      />
+                    </div>
+                    <div>
+                      <label className="mb-0.5 block text-[11px] font-semibold text-stone-500">
+                        दर (₹)
+                      </label>
+                      <input
+                        type="number"
+                        step="any"
+                        min="0"
+                        placeholder="0"
+                        value={item.rate}
+                        onWheel={(e) => e.currentTarget.blur()}
+                        onKeyDown={(e) => {
+                          if (e.key === 'ArrowUp' || e.key === 'ArrowDown') e.preventDefault();
+                        }}
+                        onChange={(e) => updateRow(item.id, 'rate', e.target.value)}
+                        className="entry-field w-full rounded-xl px-2.5 py-2 text-right text-sm text-stone-900 placeholder:text-stone-400"
+                      />
+                    </div>
+                  </>
+                )}
                 <div>
                   <label className="mb-0.5 block text-[11px] font-semibold text-stone-500">
                     रक्कम (₹)
@@ -990,7 +1428,7 @@ export function VoucherEntryForm({
                       if (e.key === 'ArrowUp' || e.key === 'ArrowDown') e.preventDefault();
                     }}
                     onChange={(e) => updateRow(item.id, 'amount', parseFloat(e.target.value) || 0)}
-                    className="w-full rounded-xl border border-stone-400 bg-stone-50 px-2.5 py-2 text-right text-sm font-bold text-stone-900 focus:border-emerald-500 focus:bg-white focus:outline-none"
+                    className="entry-field w-full rounded-xl px-2.5 py-2 text-right text-sm font-bold text-stone-900 placeholder:text-stone-400"
                   />
                 </div>
               </div>
@@ -1012,11 +1450,7 @@ export function VoucherEntryForm({
 
             <div className="flex items-center gap-3 text-right">
               <span className="text-sm font-bold text-stone-600">एकूण रक्कम:</span>
-              <span
-                className={`text-2xl font-extrabold ${
-                  entryType === 'खर्च' ? 'text-rose-600' : 'text-emerald-700'
-                }`}
-              >
+              <span className={`text-2xl font-extrabold ${getEntryTypeMeta(entryType).amountClass}`}>
                 {formatCurrency(totalAmount)}
               </span>
             </div>
@@ -1028,7 +1462,7 @@ export function VoucherEntryForm({
               placeholder="टीप / शेरा (ऐच्छिक — उदा. उधारीची तारीख किंवा मजुरीचा तपशील)"
               value={notes}
               onChange={(e) => setNotes(e.target.value)}
-              className="w-full rounded-xl border border-stone-200 bg-white px-3.5 py-2 text-xs text-stone-700 placeholder:text-stone-400 focus:border-emerald-500 focus:outline-none"
+              className="entry-field w-full rounded-xl px-3.5 py-2 text-xs text-stone-700 placeholder:text-stone-400"
             />
           </div>
         </div>

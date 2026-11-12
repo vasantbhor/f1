@@ -6,24 +6,29 @@ import {
   LayoutDashboard,
   Menu,
   Sprout,
+  Users,
 } from 'lucide-react';
 import { useEffect, useMemo, useState } from 'react';
 import { CropReport } from './components/CropReport';
 import { Dashboard } from './components/Dashboard';
 import { DateReport } from './components/DateReport';
+import { PartyLedger } from './components/PartyLedger';
 import { SettingsPanel } from './components/SettingsPanel';
 import { Sidebar } from './components/Sidebar';
 import { VoucherEntryForm } from './components/VoucherEntryForm';
 import { VoucherList } from './components/VoucherList';
-import { getSampleVouchers } from './data/defaults';
-import type { ActiveTab, Voucher } from './types/farm';
+import { GENERAL_PARTY_CROP, getSampleVouchers } from './data/defaults';
+import type { ActiveTab, EntryType, Voucher, VoucherPrefill } from './types/farm';
 import {
   computeCropSummaries,
+  computePartyLedger,
   getNextVoucherNo,
   loadInitialData,
   saveCrops,
   saveExpenseCategories,
   saveIncomeCategories,
+  savePartyPaymentCategories,
+  savePartyReceiptCategories,
   saveVouchers,
 } from './utils/storage';
 
@@ -38,10 +43,19 @@ export function App() {
   const [incomeCategories, setIncomeCategories] = useState<string[]>(
     initial.incomeCategories
   );
+  const [partyPaymentCategories, setPartyPaymentCategories] = useState<string[]>(
+    initial.partyPaymentCategories
+  );
+  const [partyReceiptCategories, setPartyReceiptCategories] = useState<string[]>(
+    initial.partyReceiptCategories
+  );
 
   const [activeTab, setActiveTab] = useState<ActiveTab>('voucher-entry');
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
   const [editingVoucher, setEditingVoucher] = useState<Voucher | null>(null);
+  const [prefillEntry, setPrefillEntry] = useState<VoucherPrefill | null>(null);
+  const [prefillSeq, setPrefillSeq] = useState(0);
+  const [selectedPartyName, setSelectedPartyName] = useState<string | null>(null);
   const [cropReportFilter, setCropReportFilter] = useState<string>('सर्व');
   const [toastMsg, setToastMsg] = useState<string>('');
 
@@ -61,7 +75,16 @@ export function App() {
     saveIncomeCategories(incomeCategories);
   }, [incomeCategories]);
 
+  useEffect(() => {
+    savePartyPaymentCategories(partyPaymentCategories);
+  }, [partyPaymentCategories]);
+
+  useEffect(() => {
+    savePartyReceiptCategories(partyReceiptCategories);
+  }, [partyReceiptCategories]);
+
   const cropSummaries = useMemo(() => computeCropSummaries(vouchers), [vouchers]);
+  const partyLedger = useMemo(() => computePartyLedger(vouchers), [vouchers]);
   const nextVoucherNo = useMemo(() => getNextVoucherNo(vouchers), [vouchers]);
 
   const existingParties = useMemo(() => {
@@ -114,17 +137,27 @@ export function App() {
         updatedAt: now,
       };
       setVouchers((prev) => [newVoucher, ...prev]);
+      setPrefillEntry(null);
       setToastMsg(`व्हाउचर क्र. #${payload.voucherNo} यशस्वीरित्या जतन केले!`);
       setTimeout(() => setToastMsg(''), 4000);
     }
 
-    if (payload.crop && !crops.includes(payload.crop)) {
+    if (payload.crop && payload.crop !== GENERAL_PARTY_CROP && !crops.includes(payload.crop)) {
       setCrops((prev) => [...prev, payload.crop]);
     }
   };
 
   const handleEditVoucher = (voucher: Voucher) => {
+    setPrefillEntry(null);
     setEditingVoucher(voucher);
+    setActiveTab('voucher-entry');
+    window.scrollTo({ top: 0, behavior: 'smooth' });
+  };
+
+  const handleQuickPartyVoucher = (prefill: VoucherPrefill) => {
+    setEditingVoucher(null);
+    setPrefillEntry(prefill);
+    setPrefillSeq((n) => n + 1);
     setActiveTab('voucher-entry');
     window.scrollTo({ top: 0, behavior: 'smooth' });
   };
@@ -145,6 +178,7 @@ export function App() {
 
   const handleStartNewVoucher = () => {
     setEditingVoucher(null);
+    setPrefillEntry(null);
     setActiveTab('voucher-entry');
   };
 
@@ -154,6 +188,25 @@ export function App() {
     }
   };
 
+  const handleQuickAddCategory = (type: EntryType, categoryName: string) => {
+    const trimmed = categoryName.trim();
+    if (!trimmed) return;
+    const appendUnique = (prev: string[]) => (prev.includes(trimmed) ? prev : [...prev, trimmed]);
+    const setterMap: Record<EntryType, (updater: (prev: string[]) => string[]) => void> = {
+      खर्च: setExpenseCategories,
+      उत्पन्न: setIncomeCategories,
+      'पैसे दिले': setPartyPaymentCategories,
+      'पैसे घेतले': setPartyReceiptCategories,
+    };
+    setterMap[type](appendUnique);
+  };
+
+  const handleOpenCustomerLedger = (partyName: string | null) => {
+    setSelectedPartyName(partyName);
+    setActiveTab('party-ledger');
+    window.scrollTo({ top: 0, behavior: 'smooth' });
+  };
+
   return (
     <div className="min-h-screen bg-stone-100/80 text-stone-900">
       {/* Left Side Control Panel (Desktop Sidebar + Mobile Drawer) */}
@@ -161,6 +214,7 @@ export function App() {
         activeTab={activeTab}
         onSelectTab={(tab) => {
           if (tab !== 'crop-report') setCropReportFilter('सर्व');
+          if (tab === 'party-ledger') setSelectedPartyName(null);
           setActiveTab(tab);
         }}
         mobileOpen={mobileMenuOpen}
@@ -168,6 +222,9 @@ export function App() {
         totalExpense={totalExpense}
         totalIncome={totalIncome}
         voucherCount={vouchers.length}
+        partyLedger={partyLedger}
+        selectedPartyName={selectedPartyName}
+        onSelectParty={(partyName) => handleOpenCustomerLedger(partyName)}
         onStartNewVoucher={handleStartNewVoucher}
       />
 
@@ -213,6 +270,7 @@ export function App() {
             <Dashboard
               vouchers={vouchers}
               cropSummaries={cropSummaries}
+              partyLedger={partyLedger}
               onNavigate={setActiveTab}
               onEditVoucher={handleEditVoucher}
               onDeleteVoucher={handleDeleteVoucher}
@@ -220,24 +278,49 @@ export function App() {
                 setCropReportFilter(crop);
                 setActiveTab('crop-report');
               }}
+              onOpenPartyLedger={(partyName) => handleOpenCustomerLedger(partyName)}
             />
           )}
 
           {activeTab === 'voucher-entry' && (
             <VoucherEntryForm
-              key={editingVoucher ? editingVoucher.id : 'new-draft'}
+              key={
+                editingVoucher
+                  ? editingVoucher.id
+                  : prefillEntry
+                    ? `prefill-${prefillSeq}`
+                    : 'new-draft'
+              }
               crops={crops}
               expenseCategories={expenseCategories}
               incomeCategories={incomeCategories}
+              partyPaymentCategories={partyPaymentCategories}
+              partyReceiptCategories={partyReceiptCategories}
               existingParties={existingParties}
+              partyLedger={partyLedger}
               nextVoucherNo={nextVoucherNo}
               editingVoucher={editingVoucher}
+              prefillEntry={prefillEntry}
               recentVouchers={sortedRecent}
               onSaveVoucher={handleSaveVoucher}
-              onCancelEdit={() => setEditingVoucher(null)}
+              onCancelEdit={() => {
+                setEditingVoucher(null);
+                setPrefillEntry(null);
+              }}
               onSelectVoucherToEdit={handleEditVoucher}
               onDeleteVoucher={handleDeleteVoucher}
               onQuickAddCrop={handleQuickAddCrop}
+              onQuickAddCategory={handleQuickAddCategory}
+            />
+          )}
+
+          {activeTab === 'party-ledger' && (
+            <PartyLedger
+              partyLedger={partyLedger}
+              selectedPartyName={selectedPartyName}
+              onSelectParty={setSelectedPartyName}
+              onQuickPartyVoucher={handleQuickPartyVoucher}
+              onEditVoucher={handleEditVoucher}
             />
           )}
 
@@ -248,6 +331,7 @@ export function App() {
               onEditVoucher={handleEditVoucher}
               onDeleteVoucher={handleDeleteVoucher}
               onNewVoucher={handleStartNewVoucher}
+              onOpenPartyLedger={(partyName) => handleOpenCustomerLedger(partyName)}
             />
           )}
 
@@ -269,16 +353,22 @@ export function App() {
               crops={crops}
               expenseCategories={expenseCategories}
               incomeCategories={incomeCategories}
+              partyPaymentCategories={partyPaymentCategories}
+              partyReceiptCategories={partyReceiptCategories}
               vouchers={vouchers}
               onAddCrop={handleQuickAddCrop}
               onRemoveCrop={(c) => setCrops((prev) => prev.filter((item) => item !== c))}
-              onAddExpenseCategory={(cat) => {
-                if (!expenseCategories.includes(cat)) {
-                  setExpenseCategories((prev) => [...prev, cat]);
-                }
-              }}
+              onAddExpenseCategory={(cat) => handleQuickAddCategory('खर्च', cat)}
               onRemoveExpenseCategory={(cat) =>
                 setExpenseCategories((prev) => prev.filter((item) => item !== cat))
+              }
+              onAddPartyPaymentCategory={(cat) => handleQuickAddCategory('पैसे दिले', cat)}
+              onRemovePartyPaymentCategory={(cat) =>
+                setPartyPaymentCategories((prev) => prev.filter((item) => item !== cat))
+              }
+              onAddPartyReceiptCategory={(cat) => handleQuickAddCategory('पैसे घेतले', cat)}
+              onRemovePartyReceiptCategory={(cat) =>
+                setPartyReceiptCategories((prev) => prev.filter((item) => item !== cat))
               }
               onLoadSampleData={() => setVouchers(getSampleVouchers())}
               onClearAllVouchers={() => {
@@ -294,6 +384,12 @@ export function App() {
                 if (data.incomeCategories && data.incomeCategories.length > 0) {
                   setIncomeCategories(data.incomeCategories);
                 }
+                if (data.partyPaymentCategories && data.partyPaymentCategories.length > 0) {
+                  setPartyPaymentCategories(data.partyPaymentCategories);
+                }
+                if (data.partyReceiptCategories && data.partyReceiptCategories.length > 0) {
+                  setPartyReceiptCategories(data.partyReceiptCategories);
+                }
               }}
             />
           )}
@@ -301,13 +397,14 @@ export function App() {
       </main>
 
       {/* Mobile Bottom Quick Nav Bar */}
-      <nav className="fixed inset-x-0 bottom-0 z-20 grid grid-cols-5 border-t border-stone-200 bg-white/95 backdrop-blur lg:hidden">
+      <nav className="fixed inset-x-0 bottom-0 z-20 grid grid-cols-6 border-t border-stone-200 bg-white/95 backdrop-blur lg:hidden">
         {(
           [
             { id: 'dashboard', label: 'फलक', icon: LayoutDashboard },
             { id: 'voucher-entry', label: 'व्हाउचर', icon: FilePlus2 },
+            { id: 'party-ledger', label: 'पार्टी', icon: Users },
             { id: 'voucher-list', label: 'यादी', icon: ClipboardList },
-            { id: 'crop-report', label: 'पीक नफा', icon: BarChart3 },
+            { id: 'crop-report', label: 'पीक', icon: BarChart3 },
             { id: 'date-report', label: 'अहवाल', icon: CalendarDays },
           ] as const
         ).map((item) => {

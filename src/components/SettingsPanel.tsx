@@ -8,18 +8,24 @@ import {
   Trash2,
   Upload,
 } from 'lucide-react';
-import { useRef, useState } from 'react';
+import { useRef, useState, type ReactNode } from 'react';
 import type { Voucher } from '../types/farm';
 
 interface SettingsPanelProps {
   crops: string[];
   expenseCategories: string[];
   incomeCategories: string[];
+  partyPaymentCategories: string[];
+  partyReceiptCategories: string[];
   vouchers: Voucher[];
   onAddCrop: (crop: string) => void;
   onRemoveCrop: (crop: string) => void;
   onAddExpenseCategory: (cat: string) => void;
   onRemoveExpenseCategory: (cat: string) => void;
+  onAddPartyPaymentCategory: (cat: string) => void;
+  onRemovePartyPaymentCategory: (cat: string) => void;
+  onAddPartyReceiptCategory: (cat: string) => void;
+  onRemovePartyReceiptCategory: (cat: string) => void;
   onLoadSampleData: () => void;
   onClearAllVouchers: () => void;
   onRestoreBackup: (data: {
@@ -27,24 +33,102 @@ interface SettingsPanelProps {
     crops?: string[];
     expenseCategories?: string[];
     incomeCategories?: string[];
+    partyPaymentCategories?: string[];
+    partyReceiptCategories?: string[];
   }) => void;
+}
+
+interface TagManagerCardProps {
+  title: string;
+  icon: ReactNode;
+  placeholder: string;
+  items: string[];
+  value: string;
+  onChange: (val: string) => void;
+  onSubmit: (e: React.FormEvent) => void;
+  onRemove: (item: string) => void;
+}
+
+function TagManagerCard({
+  title,
+  icon,
+  placeholder,
+  items,
+  value,
+  onChange,
+  onSubmit,
+  onRemove,
+}: TagManagerCardProps) {
+  return (
+    <div className="rounded-2xl border border-stone-200 bg-white p-5 shadow-sm">
+      <h3 className="mb-3 flex items-center gap-2 text-base font-extrabold text-stone-900">
+        {icon}
+        {title}
+      </h3>
+      <form onSubmit={onSubmit} className="mb-4 flex gap-2">
+        <input
+          type="text"
+          placeholder={placeholder}
+          value={value}
+          onChange={(e) => onChange(e.target.value)}
+          className="entry-field flex-1 rounded-xl px-3.5 py-2 text-sm text-stone-900 placeholder:text-stone-400"
+        />
+        <button
+          type="submit"
+          className="inline-flex items-center gap-1 rounded-xl bg-emerald-600 px-4 py-2 text-sm font-bold text-white hover:bg-emerald-700"
+        >
+          <Plus className="h-4 w-4" />
+          <span>जोडा</span>
+        </button>
+      </form>
+
+      <div className="flex flex-wrap gap-2">
+        {items.map((item) => (
+          <span
+            key={item}
+            className="inline-flex items-center gap-1.5 rounded-xl border border-stone-200 bg-stone-100 px-3 py-1.5 text-sm font-bold text-stone-800"
+          >
+            <span>{item}</span>
+            {items.length > 1 && (
+              <button
+                type="button"
+                onClick={() => onRemove(item)}
+                className="rounded p-0.5 text-stone-500 hover:bg-stone-200 hover:text-rose-700"
+                title="काढा"
+              >
+                <Trash2 className="h-3.5 w-3.5" />
+              </button>
+            )}
+          </span>
+        ))}
+      </div>
+    </div>
+  );
 }
 
 export function SettingsPanel({
   crops,
   expenseCategories,
   incomeCategories,
+  partyPaymentCategories,
+  partyReceiptCategories,
   vouchers,
   onAddCrop,
   onRemoveCrop,
   onAddExpenseCategory,
   onRemoveExpenseCategory,
+  onAddPartyPaymentCategory,
+  onRemovePartyPaymentCategory,
+  onAddPartyReceiptCategory,
+  onRemovePartyReceiptCategory,
   onLoadSampleData,
   onClearAllVouchers,
   onRestoreBackup,
 }: SettingsPanelProps) {
   const [newCrop, setNewCrop] = useState('');
   const [newCat, setNewCat] = useState('');
+  const [newPaymentReason, setNewPaymentReason] = useState('');
+  const [newReceiptReason, setNewReceiptReason] = useState('');
   const [confirmClear, setConfirmClear] = useState(false);
   const [statusMsg, setStatusMsg] = useState('');
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -54,22 +138,19 @@ export function SettingsPanel({
     setTimeout(() => setStatusMsg(''), 4000);
   };
 
-  const handleAddCrop = (e: React.FormEvent) => {
+  const handleAddTag = (
+    e: React.FormEvent,
+    raw: string,
+    clear: () => void,
+    onAdd: (val: string) => void,
+    label: string
+  ) => {
     e.preventDefault();
-    const val = newCrop.trim();
+    const val = raw.trim();
     if (!val) return;
-    onAddCrop(val);
-    setNewCrop('');
-    showStatus(`"${val}" हे नवीन पीक जोडले गेले.`);
-  };
-
-  const handleAddCat = (e: React.FormEvent) => {
-    e.preventDefault();
-    const val = newCat.trim();
-    if (!val) return;
-    onAddExpenseCategory(val);
-    setNewCat('');
-    showStatus(`"${val}" हा नवीन खर्च प्रकार जोडला गेला.`);
+    onAdd(val);
+    clear();
+    showStatus(`"${val}" ${label} जोडले गेले.`);
   };
 
   const handleDownloadBackup = () => {
@@ -80,6 +161,8 @@ export function SettingsPanel({
       crops,
       expenseCategories,
       incomeCategories,
+      partyPaymentCategories,
+      partyReceiptCategories,
     };
     const blob = new Blob([JSON.stringify(payload, null, 2)], {
       type: 'application/json',
@@ -132,95 +215,69 @@ export function SettingsPanel({
       )}
 
       <div className="grid gap-6 lg:grid-cols-2">
-        {/* Crop Management */}
-        <div className="rounded-2xl border border-stone-200 bg-white p-5 shadow-sm">
-          <h3 className="mb-3 flex items-center gap-2 text-base font-extrabold text-stone-900">
-            <Sprout className="h-5 w-5 text-emerald-600" />
-            पिके व्यवस्थापन (Crops)
-          </h3>
-          <form onSubmit={handleAddCrop} className="mb-4 flex gap-2">
-            <input
-              type="text"
-              placeholder="नवीन पिकाचे नाव (उदा. डाळिंब, द्राक्षे)"
-              value={newCrop}
-              onChange={(e) => setNewCrop(e.target.value)}
-              className="flex-1 rounded-xl border border-stone-300 px-3.5 py-2 text-sm focus:border-emerald-500 focus:outline-none"
-            />
-            <button
-              type="submit"
-              className="inline-flex items-center gap-1 rounded-xl bg-emerald-600 px-4 py-2 text-sm font-bold text-white hover:bg-emerald-700"
-            >
-              <Plus className="h-4 w-4" />
-              <span>जोडा</span>
-            </button>
-          </form>
+        <TagManagerCard
+          title="पिके व्यवस्थापन (Crops)"
+          icon={<Sprout className="h-5 w-5 text-emerald-600" />}
+          placeholder="नवीन पिकाचे नाव (उदा. डाळिंब, द्राक्षे)"
+          items={crops}
+          value={newCrop}
+          onChange={setNewCrop}
+          onSubmit={(e) =>
+            handleAddTag(e, newCrop, () => setNewCrop(''), onAddCrop, 'हे नवीन पीक')
+          }
+          onRemove={onRemoveCrop}
+        />
 
-          <div className="flex flex-wrap gap-2">
-            {crops.map((c) => (
-              <span
-                key={c}
-                className="inline-flex items-center gap-1.5 rounded-xl border border-emerald-200 bg-emerald-50 px-3 py-1.5 text-sm font-bold text-emerald-900"
-              >
-                <span>{c}</span>
-                {crops.length > 1 && (
-                  <button
-                    type="button"
-                    onClick={() => onRemoveCrop(c)}
-                    className="rounded p-0.5 text-emerald-700 hover:bg-emerald-200 hover:text-rose-700"
-                    title="काढा"
-                  >
-                    <Trash2 className="h-3.5 w-3.5" />
-                  </button>
-                )}
-              </span>
-            ))}
-          </div>
-        </div>
+        <TagManagerCard
+          title="खर्च प्रकार / श्रेणी (Categories)"
+          icon={<Tag className="h-5 w-5 text-amber-600" />}
+          placeholder="नवीन प्रकार (उदा. बियाणे, सिंचन, वीज बिल)"
+          items={expenseCategories}
+          value={newCat}
+          onChange={setNewCat}
+          onSubmit={(e) =>
+            handleAddTag(e, newCat, () => setNewCat(''), onAddExpenseCategory, 'हा नवीन खर्च प्रकार')
+          }
+          onRemove={onRemoveExpenseCategory}
+        />
 
-        {/* Expense Categories */}
-        <div className="rounded-2xl border border-stone-200 bg-white p-5 shadow-sm">
-          <h3 className="mb-3 flex items-center gap-2 text-base font-extrabold text-stone-900">
-            <Tag className="h-5 w-5 text-amber-600" />
-            खर्च प्रकार / श्रेणी (Categories)
-          </h3>
-          <form onSubmit={handleAddCat} className="mb-4 flex gap-2">
-            <input
-              type="text"
-              placeholder="नवीन प्रकार (उदा. बियाणे, सिंचन, वीज बिल)"
-              value={newCat}
-              onChange={(e) => setNewCat(e.target.value)}
-              className="flex-1 rounded-xl border border-stone-300 px-3.5 py-2 text-sm focus:border-emerald-500 focus:outline-none"
-            />
-            <button
-              type="submit"
-              className="inline-flex items-center gap-1 rounded-xl bg-emerald-600 px-4 py-2 text-sm font-bold text-white hover:bg-emerald-700"
-            >
-              <Plus className="h-4 w-4" />
-              <span>जोडा</span>
-            </button>
-          </form>
+        <TagManagerCard
+          title="पैसे दिले — कारणे (Party Payment Reasons)"
+          icon={<Tag className="h-5 w-5 text-sky-600" />}
+          placeholder="नवीन कारण (उदा. ट्रॅक्टर भाडे, बियाणे उधार)"
+          items={partyPaymentCategories}
+          value={newPaymentReason}
+          onChange={setNewPaymentReason}
+          onSubmit={(e) =>
+            handleAddTag(
+              e,
+              newPaymentReason,
+              () => setNewPaymentReason(''),
+              onAddPartyPaymentCategory,
+              'हे पैसे दिले कारण'
+            )
+          }
+          onRemove={onRemovePartyPaymentCategory}
+        />
 
-          <div className="flex flex-wrap gap-2">
-            {expenseCategories.map((cat) => (
-              <span
-                key={cat}
-                className="inline-flex items-center gap-1.5 rounded-xl border border-stone-200 bg-stone-100 px-3 py-1.5 text-sm font-bold text-stone-800"
-              >
-                <span>{cat}</span>
-                {expenseCategories.length > 1 && (
-                  <button
-                    type="button"
-                    onClick={() => onRemoveExpenseCategory(cat)}
-                    className="rounded p-0.5 text-stone-500 hover:bg-stone-200 hover:text-rose-700"
-                    title="काढा"
-                  >
-                    <Trash2 className="h-3.5 w-3.5" />
-                  </button>
-                )}
-              </span>
-            ))}
-          </div>
-        </div>
+        <TagManagerCard
+          title="पैसे घेतले — कारणे (Party Receipt Reasons)"
+          icon={<Tag className="h-5 w-5 text-teal-600" />}
+          placeholder="नवीन कारण (उदा. माल विक्री थकबाकी, उसने परत)"
+          items={partyReceiptCategories}
+          value={newReceiptReason}
+          onChange={setNewReceiptReason}
+          onSubmit={(e) =>
+            handleAddTag(
+              e,
+              newReceiptReason,
+              () => setNewReceiptReason(''),
+              onAddPartyReceiptCategory,
+              'हे पैसे घेतले कारण'
+            )
+          }
+          onRemove={onRemovePartyReceiptCategory}
+        />
       </div>
 
       {/* Backup & Demo Data */}

@@ -31,10 +31,10 @@ export function CropReport({
   }, [cropSummaries, selectedCrop]);
 
   const filteredVouchers = useMemo(() => {
-    const list =
-      selectedCrop === 'सर्व'
-        ? vouchers
-        : vouchers.filter((v) => v.crop === selectedCrop);
+    const list = vouchers.filter((v) => {
+      if (v.entryType !== 'खर्च' && v.entryType !== 'उत्पन्न') return false;
+      return selectedCrop === 'सर्व' || v.crop === selectedCrop;
+    });
     return [...list].sort((a, b) => b.date.localeCompare(a.date) || b.voucherNo - a.voucherNo);
   }, [vouchers, selectedCrop]);
 
@@ -108,7 +108,7 @@ export function CropReport({
           <select
             value={selectedCrop}
             onChange={(e) => setSelectedCrop(e.target.value)}
-            className="w-full rounded-xl border border-stone-300 bg-white px-3 py-2 text-sm font-bold text-stone-900 focus:border-emerald-500 focus:outline-none"
+            className="entry-field w-full rounded-xl px-3 py-2 text-sm font-bold text-stone-900"
           >
             <option value="सर्व">सर्व पिके ({cropSummaries.length})</option>
             {cropSummaries.map((c) => (
